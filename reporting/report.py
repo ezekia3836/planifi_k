@@ -11,7 +11,7 @@ class reporting:
         self.pst = PgConfig().get_client()
         self.date_end = datetime.today().date()
         self.analyze=analyse()
-        self.advertiser=13105
+        self.advertiser=1352
         self.db_id=1
         self.bd_name="comptoirdesreducs.com"
         self.table = "reporting"
@@ -144,7 +144,6 @@ class reporting:
             WHERE
                 st.id = 5
                 AND vd.advertiser = {self.advertiser}
-                AND vd.base={self.db_id}
                 AND vd.sent > 50
                AND vd.date_shedule BETWEEN DATE '{self.date_start}' AND DATE '{self.date_end}'
             """)
@@ -177,7 +176,6 @@ class reporting:
                     ON toUInt64(e.adv_id) = toUInt64(a.id )
                 LEFT JOIN tags t ON e.tag IS NOT NULL AND toUInt64(e.tag) = toUInt64(t.id)
                 WHERE e.adv_id={self.advertiser} 
-                AND e.database_id={self.db_id}
                 """
             result = self.clk.query(query)
             df= pd.DataFrame(result.result_rows, columns=result.column_names)
