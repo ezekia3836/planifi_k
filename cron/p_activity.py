@@ -71,84 +71,84 @@ class p_activity():
             db_liste = self.db_model.read_all()
             json_file = "historiques.json"
             alls = []
+            if os.path.exists(json_file) and os.path.getsize(json_file) > 0:
+                with open(json_file, "r", encoding="utf-8") as f:
+                    contents = json.load(f)
+            else:
+                contents = []
+
             for event in self.activities:
-                print(event)
+                print(f"Event : {event}")
+
                 for db in db_liste:
                     db_id = db["id"]
-                    nbre_jour = 4
+                    nbre_jour = 5
 
-                    
-                    if os.path.exists(json_file) and os.path.getsize(json_file) > 0:
-                        with open(json_file, "r", encoding="utf-8") as f:
-                            contents = json.load(f)
-                    else:
-                        contents = []
-
-                   
-                    historique = next(
-                        (c for c in contents if c.get("base_id") == db_id),
-                        None
-                    )
-
+                    historique = next((c for c in contents if c.get("base_id") == db_id),None)
                     if historique is None:
                         historique = {"base_id": db_id}
                         contents.append(historique)
-
-                   
                     if historique.get(event, 0) == 1:
                         nbre_jour = 1
-
-                    
                     historique[event] = 1
-
-                    
-                    with open(json_file, "w", encoding="utf-8") as f:
-                        json.dump(contents, f, indent=4)
-
-                    
                     date_end = datetime.now()
                     date_start = date_end - timedelta(days=nbre_jour)
-
-                    date_end = datetime.now()
-                    date_start = date_end - timedelta(days=nbre_jour)
-
                     data = self.focus_model.extract_data(date_start, date_end, db)
-                    df = pd.DataFrame(json.loads(data))
-                    ids = list(set(df['id_router'].to_list()))
-                    df_event = self.fetch_activities(db_info=db, event=event,start=date_start, end=date_end)
-                    df_event['dwh_id'] = df_event['Email'].map(lambda email: generate_id(db['id'], email, "dggf?s025mPMjdx-mMnFv") if pd.notna(email) and email else '')
-                    df_event['event_type'] = event
+                    if not data:
+                        continue
+                    df_router = pd.DataFrame(json.loads(data))
+                    if df_router.empty:
+                        continue
+                    df_router = df_router[['id_router', 'tag', 'adv_id', 'brand']].copy()
+                    df_router = df_router.rename(columns={'id_router': 'MessageId'})
+                    df_router['MessageId'] = pd.to_numeric(df_router['MessageId'], errors='coerce').fillna(0).astype(int)
 
-                    df_event['removals_raison'] = df_event['Reason'] if 'Reason' in df_event.columns else ""
+                    df_router['adv_id'] = pd.to_numeric(df_router['adv_id'], errors='coerce').fillna(0).astype(int)
+                    df_event = self.fetch_activities(db_info=db,event=event,start=date_start,end=date_end)
+                    if df_event is None or df_event.empty:
+                        continue
+                    df_event['dwh_id'] = df_event['Email'].map(lambda email: generate_id(db['id'], email, "dggf?s025mPMjdx-mMnFv") if pd.notna(email) and email else '')
+
+                    df_event['event_type'] = event
+                    df_event['removals_raison'] = (
+                        df_event['Reason'] if 'Reason' in df_event.columns else ""
+                    )
 
                     if 'MessageId' not in df_event.columns:
                         df_event['MessageId'] = 0
-                    df_event = df_event.rename(columns={'Date':'date_event'})
-                    df_event = df_event[['dwh_id', 'event_type', 'removals_raison', 'MessageId', 'date_event']]
-                    df_event['database_id'] = db['id']
+
+                    df_event = df_event.rename(columns={'Date': 'date_event'})
                     df_event['MessageId'] = pd.to_numeric(df_event['MessageId'], errors='coerce').fillna(0).astype(int)
-                    if 'date_event' in df_event.columns:
-                        df_event['date_event'] = pd.to_datetime(df_event['date_event'], errors='coerce')
-                        
+
+                    df_event['database_id'] = db_id
+                    df_event['date_event'] = pd.to_datetime(df_event['date_event'], errors='coerce')
+
+                    df_event = df_event[
+                        ['dwh_id', 'event_type', 'removals_raison',
+                        'MessageId', 'date_event', 'database_id']
+                    ]
+                    df_event = df_event.merge(
+                        df_router,
+                        on='MessageId',
+                        how='left'
+                    )
+
                     alls.append(df_event)
+            with open(json_file, "w", encoding="utf-8") as f:
+                json.dump(contents, f, indent=4)
 
-            print("historiques sauvegardées")
+            print("Historiques sauvegardées")
 
-            if alls:
-                ds = pd.concat(alls, ignore_index=True)
-                df_merge = df[['id_router', 'tag', 'adv_id', 'brand']].rename(columns={'id_router': 'MessageId'})
-                df_merge['MessageId'] = pd.to_numeric(df_merge['MessageId'], errors='coerce').fillna(0).astype(int)
-                df_merge['adv_id'] = pd.to_numeric(df_merge['adv_id'], errors='coerce').fillna(0).astype(int)
-                ds = ds.merge(df_merge, on='MessageId', how='left')
-                df_clean=events.clean_events_df(ds)
-                #chunks = np.array_split(ds, max(1, len(ds) // chunk_size))
-                #for chunk in chunks:
-                    #self.events_model.insert_dataframe(chunk)
-                #ds.to_csv('dsfqs.csv', index=False)
-                gcs.upload_to_gcs(chunk_size=self.chunksize,prefix=self.prefix,df=df_clean,path_gcs=self.path)
-                del df, ds, df_event, df_merge
+            if not alls:
+                print("Aucune donnée collectée")
+                return
+            ds = pd.concat(alls, ignore_index=True)
+            df_clean = events.clean_events_df(ds)
+            gcs.upload_to_gcs(chunk_size=self.chunksize,prefix=self.prefix,df=df_clean,path_gcs=self.path)
             gcs.insert_into_clickhouse(prefix=self.path,bucket_name='plannifik',table=self.prefix)
             gcs.delete_data_bucket(prefix=self.path)
+            print("Activities traitées avec succès")
+
         except Exception as e:
-            print('error activities', e)
-            pass
+            print("error activities:", e)
+
