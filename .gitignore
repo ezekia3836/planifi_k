@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+config/
+google/
+planifik/
+temp_sl/
+*.csv
+*.zip
+*.json
+*.yml
+*.txt
+*.png
+*.xlsx
