@@ -44,4 +44,4 @@ class Cron():
             cron=reporting()
             cron.report()
         except Exception as e:
-            pass
+            print(e)

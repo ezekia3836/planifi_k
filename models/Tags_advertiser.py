@@ -2,6 +2,7 @@ import pandas as pd
 from config.ClickHouseConfig import ClickHouseConfig
 from collections import defaultdict
 import json
+from reporting.analyze import analyse
 from fastapi import HTTPException
 class TagsAdvertiser:
     def __init__(self, client=None):
@@ -13,6 +14,7 @@ class TagsAdvertiser:
         self.table1="tags"
         self.table2="advertiser"
         self.table3 = "reporting"
+        self.analyze=analyse()
     def insert_dataframe(self,table_name, df):
         try:
             if df.empty:
@@ -125,7 +127,7 @@ class TagsAdvertiser:
 
     def report_advertiser(self, advertiser):
         try:
-            query = """SELECT adv_id,advertiser_name,data FROM reporting WHERE adv_id=%(adv)s AND id_routers=0 AND database_id=0"""
+            query = """SELECT adv_id,advertiser_name,database_id FROM reporting WHERE adv_id=%(adv)s AND id_routers=0 AND database_id=0"""
             result = self.client.query(query, parameters={"adv": advertiser})
             rows = []
             for row in result.result_rows:
@@ -134,11 +136,74 @@ class TagsAdvertiser:
         except Exception as e:
             print('advertiser', e)
             return []
-    def report_base(self,base,adv):
+    def report_base(self, db_id,adv):
         try:
-            query="""SELECT database_id,adv_id,data FROM reporting WHERE database_id=%(base)s AND adv_id=%(adv)s AND id_routers=0"""
-            result = self.client.query(query,parameters={"base":base,"adv":adv})
-            return [dict(zip(result.column_names, row)) for row in result.result_rows]
+            query = """
+                SELECT adv_id, advertiser_name, dimension, dim_content, sends, clicks, opens, removals, ca
+                FROM reporting1
+                WHERE database_id = %(db_id)s AND adv_id=%(adv)s
+            """
+            result = self.client.query(query, parameters={"db_id": db_id, "adv":adv})
+            rows = [dict(zip(result.column_names, row)) for row in result.result_rows]
+
+            advertisers_dict = {}
+            dimensions_dict = {}
+
+            for r in rows:
+                adv_id = r['adv_id']
+                adv_name = r['advertiser_name']
+
+                if adv_id not in advertisers_dict:
+                    total_sends = r['sends']
+                    total_clicks = r['clicks']
+                    total_ca = r['ca']
+
+                    ecpm = (total_ca / total_sends * 1000) if total_sends else 0.0
+                    taux_clickers = (total_clicks / total_sends * 100) if total_sends else 0.0
+
+                    advertisers_dict[adv_id] = {
+                        "name": adv_name,
+                        "classe": self.analyze.classify_advertiser(ecpm, taux_clickers)
+                    }
+
+                dim = r['dimension']
+                content = r['dim_content']
+
+                if dim not in dimensions_dict:
+                    dimensions_dict[dim] = {}
+
+                if content not in dimensions_dict[dim]:
+                    dimensions_dict[dim][content] = {
+                        "sends": 0,
+                        "clicks": 0,
+                        "opens": 0,
+                        "removals": 0,
+                        "ca": 0
+                    }
+
+                dimensions_dict[dim][content]['sends'] += r['sends']
+                dimensions_dict[dim][content]['clicks'] += r['clicks']
+                dimensions_dict[dim][content]['opens'] += r['opens']
+                dimensions_dict[dim][content]['removals'] += r['removals']
+                dimensions_dict[dim][content]['ca'] += r['ca']
+
+            for dim_vals in dimensions_dict.values():
+                for val, metrics in dim_vals.items():
+                    for k in metrics:
+                        metrics[k] = float(metrics[k])
+
+            return {
+                "base_id": db_id,
+                "advertisers": {
+                    "analyses": list(advertisers_dict.values())
+                },
+                "dimensions": dimensions_dict
+            }
+
         except Exception as e:
-            print("base",e)
-            return []
+            print("Erreur report_base:", e)
+            return {
+                "base_id": db_id,
+                "advertisers": {"analyses": []},
+                "dimensions": {}
+            }

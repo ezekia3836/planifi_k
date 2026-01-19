@@ -8,11 +8,13 @@ from fastapi_cache.decorator import cache
 from routers import database_router
 from apscheduler.schedulers.background import BackgroundScheduler
 from models.Tags_advertiser import TagsAdvertiser
+from models.query import Query
 from datetime import datetime
 from cron.Cron import Cron
 import json
 import time
 tgadv = TagsAdvertiser()
+query = Query()
 # Configuration CORS
 origins = [
     "http://localhost",
@@ -71,14 +73,18 @@ async def get_report(router:int ,adv:int):
 @app.get("/reporting/adv/{adv}")
 @cache(expire=60)
 async def get_report_advertiser(adv):
-    data = tgadv.report_advertiser(adv)
-    safe_data = json.loads(json.dumps(data, ensure_ascii=False))
-    return JSONResponse(content=safe_data)
+    data = query.global_advertiser(adv)
+    return data
 
 @app.get("/reporting/db/{db_id}")
 @cache(expire=60)
-async def get_report_db(db_id:int, adv:int):
-    return tgadv.report_base(db_id,adv)
+async def get_report_db(db_id:int):
+    return query.global_base(db_id)
+
+@app.get('/reporting/calendrier/{adv}')
+@cache(expire=60)
+async def calendrier(adv):
+    return query.calendrier(adv_id=adv)
 def job_cron():
     start = datetime.now()
     cron = Cron()
@@ -86,7 +92,7 @@ def job_cron():
     #cron.start_cont()
     #cron.start_act()
     #cron.start_tags()
-    cron.start_reporting()
+    #cron.start_reporting()
     print(f"[{datetime.now()}] Exécution du cron  {datetime.now() - start}")
     # Ici tu peux mettre ton code, par ex. appeler la Database class
 

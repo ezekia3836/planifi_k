@@ -36,13 +36,14 @@ class Events:
         for col in datetime_cols:
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col], errors="coerce")
-        """df.to_csv(
-            "events.csv",
-            sep="|",
-            index=False,
-            encoding="utf-8"
-        )"""
-
         return df
+    
+    def get_adv_ids(self):
+        try:
+            query=f""" SELECT DISTINCT adv_id FROM {self.table_name} WHERE adv_id!=0"""
+            result = self.client.query(query)
+            return [row[0] for row in result.result_rows]
+        except Exception as e:
+            print("erreur",e)
 
 
