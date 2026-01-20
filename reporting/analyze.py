@@ -43,7 +43,7 @@ class analyse:
                 return "✅ Taux de désabonnement faible"
             else:
                 return "ℹ️ Taux de désabonnement normal"
-     def normalize_click_level(self, click_rate):
+     def normalize_clicks(self, click_rate):
             msg = self.analyze_click_rate(click_rate)
             if "faible" in msg:
                 return "faible"
@@ -54,16 +54,16 @@ class analyse:
             else:
                 return "faible"
      def classify_ecpm(self, ecpm):
-        if ecpm < 0.5:
+        if ecpm < config.REPORTING_ADVERTISER[0]:
             return "faible"
-        elif 0.5 <= ecpm <= 1:
+        elif config.REPORTING_ADVERTISER[0] <= ecpm <= config.REPORTING_ADVERTISER[1]:
             return "moyen"
         else:
             return "bon"
 
      def classify_advertiser(self, ecpm, taux_clicks):
         ecpm_level = self.classify_ecpm(ecpm)
-        click_level = self.normalize_click_level(taux_clicks)
+        click_level = self.normalize_clicks(taux_clicks)
         if ecpm_level == "bon" and click_level == "bon":
             return "A"
         elif ecpm_level == "moyen" and click_level == "moyen":

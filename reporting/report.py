@@ -6,7 +6,6 @@ from datetime import datetime,timedelta
 from sqlalchemy import text
 from reporting.analyze import analyse
 from models.Events import Events
-from reporting.build import build
 events = Events()
 class reporting:
     def __init__(self):
@@ -14,9 +13,8 @@ class reporting:
         self.pst = PgConfig().get_client()
         self.date_end = datetime.today().date()
         self.analyze=analyse()
-        self.build = build()
         self.advertiser=Events().get_adv_ids()
-        self.adv_ids =9663 #",".join(map(str, self.advertiser))
+        self.adv_ids =",".join(map(str, self.advertiser))
         #self.db_id=1
         #self.bd_name="comptoirdesreducs.com"
         self.table = "reporting"
@@ -180,7 +178,7 @@ class reporting:
                 LEFT JOIN advertiser a 
                     ON toUInt64(e.adv_id) = toUInt64(a.id )
                 LEFT JOIN tags t ON e.tag IS NOT NULL AND toUInt64(e.tag) = toUInt64(t.id)
-                WHERE e.adv_id IN ({advertiser}) 
+                WHERE e.adv_id IN ({advertiser})
                 """
             result = self.clk.query(query)
             df= pd.DataFrame(result.result_rows, columns=result.column_names)
@@ -232,22 +230,9 @@ class reporting:
             ("main_isp", "isp")
         ]
 
-        for keys, g in df.groupby([
-            "database_id",
-            "adv_id",
-            "advertiser_name",
-            "id_routers",
-            "tag_id",
-            "tag_name",
-            "year","month","week","day","hour"
-        ]):
+        for keys, g in df.groupby(["database_id","adv_id","advertiser_name","id_routers","tag_id","tag_name","year","month","week","day","hour"]):
 
-            (
-                database_id, adv_id, advertiser_name,
-                router, tag_id, tag_name,
-                year, month, week, day, hour
-            ) = keys
-
+            (database_id, adv_id, advertiser_name,router, tag_id, tag_name,year, month, week, day, hour) = keys
             ca_value = g["ca"].max(skipna=True)
             ca_value = float(ca_value) if pd.notna(ca_value) else 0.0
             for col, dim_name in dimensions:
@@ -276,9 +261,7 @@ class reporting:
                             "hour": hour,
                             "created_at": self.created_at
                         })
-        multi = g.groupby(
-                ["age_range","gender","main_isp"]
-            ).sum(numeric_only=True).reset_index()
+        multi = g.groupby(["age_range","gender","main_isp"]).sum(numeric_only=True).reset_index()
 
         for _, r in multi.iterrows():
             key = f"{r['age_range']}_{r['gender']}_{r['main_isp']}"
@@ -306,9 +289,6 @@ class reporting:
                 "created_at": self.created_at
             })
         df_final = pd.DataFrame(rows)
-                # Supposons que df_final est ton DataFrame final
-
-        # 🔑 Colonnes entières
         int_cols = [
             "database_id", "adv_id", "tag_id",
             "sends", "opens", "clicks", "removals", "complains",
@@ -333,8 +313,8 @@ class reporting:
                 df_final[col] = df_final[col].fillna("").astype(str)
 
         df_final["created_at"] = pd.to_datetime(df_final["created_at"], errors='coerce').fillna(datetime.now())
-
-        for start in range(0, len(df_final), 1000):
-                self.clk.insert_df('reporting', df_final.iloc[start:start+1000])
+        batch_size=100_000
+        for start in range(0, len(df_final), batch_size):
+                self.clk.insert_df('reporting', df_final.iloc[start:start+batch_size])
         print('Reporting inseré!!')
    
