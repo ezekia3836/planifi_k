@@ -116,7 +116,6 @@ class p_activity():
 
                     if 'MessageId' not in df_event.columns:
                         df_event['MessageId'] = 0
-
                     df_event = df_event.rename(columns={'Date': 'date_event'})
                     df_event['MessageId'] = pd.to_numeric(df_event['MessageId'], errors='coerce').fillna(0).astype(int)
 
@@ -132,8 +131,7 @@ class p_activity():
                         on='MessageId',
                         how='left'
                     )
-
-                    alls.append(df_event)
+                    """alls.append(df_event)
             with open(json_file, "w", encoding="utf-8") as f:
                 json.dump(contents, f, indent=4)
 
@@ -147,7 +145,7 @@ class p_activity():
             gcs.upload_to_gcs(chunk_size=self.chunksize,prefix=self.prefix,df=df_clean,path_gcs=self.path)
             gcs.insert_into_clickhouse(prefix=self.path,bucket_name='plannifik',table=self.prefix)
             gcs.delete_data_bucket(prefix=self.path)
-            print("Activities traitées avec succès")
+            print("Activities traitées avec succès")"""
 
         except Exception as e:
             print("error activities:", e)

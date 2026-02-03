@@ -42,6 +42,6 @@ class Cron():
     def start_reporting(self):
         try:
             cron=reporting()
-            cron.report()
+            cron.run()
         except Exception as e:
             print(e)

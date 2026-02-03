@@ -64,7 +64,7 @@ class analyse:
      def classify_advertiser(self, ecpm, taux_clicks):
         ecpm_level = self.classify_ecpm(ecpm)
         click_level = self.normalize_clicks(taux_clicks)
-        if ecpm_level == "bon" and click_level == "bon":
+        if ecpm_level == "bon" and click_level == "bon" or click_level == "moyen":
             return "A"
         elif ecpm_level == "moyen" and click_level == "moyen":
             return "B"
@@ -74,3 +74,10 @@ class analyse:
             return "D"
         else:
             return "Non classé"
+
+
+     def analyse_ecpm(self,ecpm,sends):
+         if sends<= config.MIN_SENDS_ECPM:
+             return "Non significatif (volume trop faible)"
+         else:
+             return ecpm

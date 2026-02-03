@@ -14,7 +14,7 @@ contact = Contacts()
 class p_contact():
 
     def __init__(self):
-        self.clk = ClickHouseConfig().getClient()
+        self.clk = ClickHouseConfig().getClient_loc()
         self.db_model = Database(client=self.clk)
         self.TEMP_SL = "temp_sl"
         os.makedirs(self.TEMP_SL, exist_ok=True)

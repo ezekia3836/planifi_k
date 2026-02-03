@@ -11,7 +11,7 @@ class Contacts:
         :param client: clickhouse_driver.Client
         :param table_name: nom de la table ClickHouse
         """
-        self.client = client if client else ClickHouseConfig().getClient()
+        self.client = client if client else ClickHouseConfig().getClient_loc()
         self.table_name = table_name
 
 

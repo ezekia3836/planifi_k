@@ -85,6 +85,28 @@ async def get_report_db(db_id:int):
 @cache(expire=60)
 async def calendrier(adv):
     return query.calendrier(adv_id=adv)
+
+@app.get('/reporting/prog/{adv}')
+@cache(expire=60)
+async def propgramme(adv:int):
+    return query.programmes(adv)
+
+@app.get('/reporting/list_advertiser/')
+@cache(expire=60)
+async def list_advertiser():
+    return query.list_advertiser()
+@app.get('/reporting/list_tags/')
+@cache(expire=60)
+async def list_tags():
+    return query.list_tags()
+@app.get('/reporting/top/')
+@cache(expire=60)
+async def top_10_object():
+    return query.top_10_objet()
+@app.get('/reporting/compte/{adv}')
+@cache(expire=60)
+async def comptage(adv:int):
+    return query.advertiser_counts(adv)
 def job_cron():
     start = datetime.now()
     cron = Cron()
@@ -92,7 +114,7 @@ def job_cron():
     #cron.start_cont()
     #cron.start_act()
     #cron.start_tags()
-    #cron.start_reporting()
+    cron.start_reporting()
     print(f"[{datetime.now()}] Exécution du cron  {datetime.now() - start}")
     # Ici tu peux mettre ton code, par ex. appeler la Database class
 

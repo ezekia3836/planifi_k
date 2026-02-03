@@ -10,7 +10,7 @@ class TagsAdvertiser:
         Classe pour gérer les tags et les advertisers dans ClickHouse.
         :param client: clickhouse_driver.Client
         """
-        self.client = client if client else ClickHouseConfig().getClient()
+        self.client = client if client else ClickHouseConfig().getClient_loc()
         self.table1="tags"
         self.table2="advertiser"
         self.table3 = "reporting"

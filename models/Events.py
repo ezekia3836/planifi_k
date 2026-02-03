@@ -8,7 +8,7 @@ class Events:
         :param client: clickhouse_driver.Client
         :param table_name: nom de la table ClickHouse
         """
-        self.client = client if client else ClickHouseConfig().getClient()
+        self.client = client if client else ClickHouseConfig().getClient_prod()
         self.table_name = table_name
 
     def insert_dataframe(self, df):
@@ -40,10 +40,12 @@ class Events:
     
     def get_adv_ids(self):
         try:
-            query=f""" SELECT DISTINCT adv_id FROM {self.table_name} WHERE adv_id!=0"""
+            query=f""" select distinct adv_id from planifik.events t WHERE adv_id NOT IN(0,4892,472,9335) AND adv_id NOT IN (SELECT DISTINCT adv_id from planifik.reporting ) LIMIT 1
+                """
             result = self.client.query(query)
             return [row[0] for row in result.result_rows]
         except Exception as e:
             print("erreur",e)
+
 
 

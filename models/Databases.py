@@ -4,7 +4,7 @@ from datetime import datetime
 import pandas as pd
 class Database:
     def __init__(self, client=None):
-        self.client = client if client else ClickHouseConfig().getClient()
+        self.client = client if client else ClickHouseConfig().getClient_prod()
         self.table_name = "databases"
 
     # Créer un enregistrement

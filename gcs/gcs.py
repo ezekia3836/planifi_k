@@ -11,7 +11,7 @@ class gcs:
     def __init__(self,bucket: str):
         self.client = gcs_client
         self.bucket = gcs_client.bucket(bucket)
-        self.clk = ClickHouseConfig().getClient()
+        self.clk = ClickHouseConfig().getClient_loc()
 
 
     def upload_to_gcs(self,chunk_size,prefix,df,path_gcs):

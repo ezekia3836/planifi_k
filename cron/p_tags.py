@@ -13,7 +13,7 @@ class p_tags:
         self.url_old = "https://stats.kontikimedia.com/publicapi"
         self.url = "https://stats.kontikimedia.com/publicapi/statsapi"
         self.url_es = "https://stats.kontikimedia.com/publicapi/esapi"
-        self.clk = ClickHouseConfig().getClient()
+        self.clk = ClickHouseConfig().getClient_prod()
         self.db_model = Database(client=self.clk)
         self.tags_model = TagsAdvertiser(client=self.clk)
         #self.url_stats_sms = "https://stats.kontikimedia.com/publicapi/cmapi"
