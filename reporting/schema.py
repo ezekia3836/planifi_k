@@ -22,7 +22,7 @@ class DimensionStats(Stats):
 
 class Dimensions(BaseModel):
     age_range:Optional[Dict[str,Any]]=None
-    civilite:Optional[Dict[str,Any]]=None
+    gender:Optional[Dict[str,Any]]=None
     isp:Optional[Dict[str,Any]]=None
     age_civilite_isp:Optional[Dict[str,Any]]=None
 
@@ -50,23 +50,22 @@ class BaseItem(BaseModel):
     rang: int
 
 class GlobalAdvertiserStats(BaseModel):
-    sends: int
-    clickers: int
-    openers: int
-    unsubs: int
-    complaints: int
-    ecpm: float
-    ca: float
-    taux_clicks: float
-    taux_opens: float
-    taux_unsubs: float
-    taux_cto: float
+    sends: int=0
+    clickers: int=0
+    openers: int=0
+    unsubs: int=0
+    complaints: int=0
+    ecpm: float=0.0
+    ca: float=0.0
+    taux_clicks: float=0.0
+    taux_opens: float=0.0
+    taux_unsubs: float=0.0
+    taux_cto: float=0.0
 
 class GlobalAdvertiserResponse(BaseModel):
     advertiser_id:str
-    globales:GlobalAdvertiserStats
+    globales:Optional[GlobalAdvertiserStats]=None
     bases:List[BaseItem]
-
 
 class GobalBaseStats(BaseModel):
     sends_total:int

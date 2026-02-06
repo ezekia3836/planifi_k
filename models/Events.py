@@ -3,11 +3,6 @@ from config.ClickHouseConfig import ClickHouseConfig
 from utils import parse_mobile
 class Events:
     def __init__(self, client=None, table_name="events"):
-        """
-        Classe pour gérer les contacts dans ClickHouse.
-        :param client: clickhouse_driver.Client
-        :param table_name: nom de la table ClickHouse
-        """
         self.client = client if client else ClickHouseConfig().getClient_prod()
         self.table_name = table_name
 
@@ -40,7 +35,7 @@ class Events:
     
     def get_adv_ids(self):
         try:
-            query=f""" select distinct adv_id from planifik.events WHERE adv_id!=0 AND adv_id NOT IN (SELECT DISTINCT adv_id from planifik.reporting ) ORDER BY adv_id ASC
+            query=f""" select distinct adv_id from planifik.events WHERE adv_id NOT IN (SELECT DISTINCT adv_id from planifik.reporting ) AND event_type='Sends' ORDER BY adv_id ASC
                 """
             result = self.client.query(query)
             return [row[0] for row in result.result_rows]

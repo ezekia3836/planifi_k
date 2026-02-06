@@ -45,7 +45,7 @@ def job_cron():
     #cron.start_cont()
     #cron.start_act()
     #cron.start_tags()
-    #cron.start_reporting()
+    cron.start_reporting()
     print(f"[{datetime.now()}] Exécution du cron  {datetime.now() - start}")
     # Ici tu peux mettre ton code, par ex. appeler la Database class
 
