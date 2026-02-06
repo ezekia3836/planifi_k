@@ -8,11 +8,9 @@ from fastapi_cache.decorator import cache
 from routers import database_router
 from apscheduler.schedulers.background import BackgroundScheduler
 from models.Tags_advertiser import TagsAdvertiser
-from models.query import Query
 from datetime import datetime
 from cron.Cron import Cron
 from reporting.router import router as reporting_router
-from typing import Optional
 tgadv = TagsAdvertiser()
 
 origins = [

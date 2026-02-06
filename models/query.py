@@ -616,6 +616,8 @@ class Query:
             print("erreur top 10", e)
             return {"top_10": []}
         
+
+
     def advertiser_counts(self, adv_id: int):
         query = f"""
             SELECT gender, age_range, main_isp, SUM(sends) AS total
@@ -628,14 +630,14 @@ class Query:
         result = {
             "advertiser_id": adv_id,
             "totals": 0,
-            "details": []  
+            "details": []
         }
 
         for r in rows:
             gender = r["gender"] or "O_gender"
             age_range = r["age_range"] or "O_age"
             isp = r["main_isp"] or "O_isp"
-            total = r["total"]
+            total = r["total"] or 0
 
             result["totals"] += total
             result["details"].append({
@@ -645,20 +647,14 @@ class Query:
                 "total": total
             })
 
-        def filter_counts(
-            gender: Optional[str] = None,
-            min_age: Optional[int] = None,
-            max_age: Optional[int] = None,
-            isp: Optional[str] = None
-        ):
+        def filter_counts(gender: Optional[str] = None, min_age: Optional[int] = None,max_age: Optional[int] = None,isp: Optional[str] = None):
             total_filtered = 0
 
             for item in result["details"]:
-
-                if gender and item["gender"] != gender:
+                if gender and item.get("gender") != gender:
                     continue
 
-                if isp and item["isp"] != isp:
+                if isp and item.get("isp") != isp:
                     continue
 
                 if min_age is not None or max_age is not None:
@@ -666,38 +662,24 @@ class Query:
                         start, end = map(int, item["age_range"].split('-'))
                     except ValueError:
                         continue
-
                     if min_age is not None and end < min_age:
                         continue
                     if max_age is not None and start > max_age:
                         continue
 
-                total_filtered += item["total"]
-                GENDER_LABELS = {
-                    "M": "Homme",
-                    "F": "Femme",
-                    "O_gender": "Inconnu"
-                }
-            label_parts = []
+                total_filtered += item.get("total", 0)
 
-            if gender:
-                label_parts.append(GENDER_LABELS.get(gender, gender))
-
-            if min_age is not None and max_age is not None:
-                label_parts.append(f"{min_age}-{max_age} ans")
-            elif min_age is not None:
-                label_parts.append(f"+{min_age} ans")
-            elif max_age is not None:
-                label_parts.append(f"-{max_age} ans")
-
-            if isp:
-                label_parts.append(isp)
-
-            label = " ".join(label_parts) if label_parts else "Total"
+            comptage = {
+                "gender": gender,
+                "min_age": min_age,
+                "max_age": max_age,
+                "isp": isp,
+                "total": total_filtered
+            }
 
             return {
-                "label": label,
-                "total": total_filtered
+                "adv_id": adv_id,
+                "comptage": comptage
             }
         result["filter"] = filter_counts
         return result

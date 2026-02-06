@@ -2,18 +2,23 @@ from models.query import Query
 from fastapi import APIRouter
 from typing import Optional
 from fastapi_cache.decorator import cache 
+from reporting.schema import (
+    GlobalAdvertiserResponse,
+    GlobalBaseResponse,
+    CountFilterResponse
+)
 query = Query()
 router = APIRouter(
     prefix="/reporting", 
     tags=["Reporting"],   
 )
 
-@router.get("/adv/{adv}", summary="Rapport d'un advertiser")
+@router.get("/adv/{adv}", summary="Rapport d'un advertiser",response_model=GlobalAdvertiserResponse)
 @cache(expire=60)
 async def get_report_advertiser(adv: int):
     return query.global_advertiser(adv)
 
-@router.get("/db/{db_id}", summary="Rapport d'une base")
+@router.get("/db/{db_id}", summary="Rapport d'une base",response_model=GlobalBaseResponse)
 @cache(expire=60)
 async def get_report_db(db_id: int):
     return query.global_base(db_id)
@@ -43,17 +48,30 @@ async def list_tags():
 async def top_10_object():
     return query.top_10_objet()
 
-@router.get("/{adv_id}/counts", summary="Comptage par filtre")
-@cache(expire=60)
-def get_advertiser_counts(
-    adv_id: int,
-    gender: Optional[str] = None,
-    min_age: Optional[int] = None,
-    max_age: Optional[int] = None,
-    isp: Optional[str] = None
-):
+@router.get("/{adv_id}/counts", summary="Comptage par filtre", response_model=CountFilterResponse)
+def get_advertiser_counts(adv_id: int, gender: Optional[str] = None, min_age: Optional[int] = None, max_age: Optional[int] = None, isp: Optional[str] = None):
     data = query.advertiser_counts(adv_id)
+
     if gender or min_age or max_age or isp:
-        total_filtered = data["filter"](gender=gender, min_age=min_age, max_age=max_age, isp=isp)
-        return {"advertiser_id": adv_id, "total": total_filtered}
-    return data
+        filtered = data["filter"](
+            gender=gender,
+            min_age=min_age,
+            max_age=max_age,
+            isp=isp
+        )
+        return {
+            "adv_id": adv_id,   
+            "comptage": filtered["comptage"]
+        }
+
+    total_global = sum(item["total"] for item in data["details"])
+    return {
+        "adv_id": adv_id,
+        "comptage": {
+            "gender": None,
+            "min_age": None,
+            "max_age": None,
+            "isp": None,
+            "total": total_global
+        }
+    }
