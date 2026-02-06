@@ -7,7 +7,7 @@ import calendar
 import math
 import re
 import base64
-
+from typing import Optional
 
 class Query:
     def __init__(self):
@@ -94,7 +94,7 @@ class Query:
         total_complaints_global = 0
 
         for r in rows:
-            base_key = (r["database_id"], r["id_routers"], r['tag_id'], r['brand'])
+            base_key = (r["database_id"], r["id_routers"], r['tag_id'], r['brand'],r['segmentId'])
             base = bases.setdefault(base_key, {
                 "database_id": r["database_id"],
                 "id_routers": r["id_routers"],
@@ -107,7 +107,7 @@ class Query:
                 "complaints": 0,
                 "ca": 0.0,
                 "date_shedule": [],
-                "SegmentId": r.get("SegmentId"),
+                "SegmentId": r.get("segmentId"),
                 "subject": r.get("subject"),
                 "dimensions": {
                     "age_range": {},
@@ -131,7 +131,7 @@ class Query:
             base["complaints"] += complaints
             base["ca"] += ca
 
-            #base["date_shedule"] = sorted(set(base["date_shedule"] + (r["date_shedule"] or [])))
+            base["date_shedule"] = sorted(set(base["date_shedule"] + (r["date_shedule"] or [])))
 
             total_sends_global += sends
             total_ca_global += ca
@@ -210,7 +210,7 @@ class Query:
                 "database_id": base["database_id"],
                 "id_routers": base["id_routers"],
                 "tag_id": base['tag_id'],
-                "brand": base['brand'],
+                "brand": base64.b64decode(base['brand']).decode("utf-8"),
                 "sends": base["sends"],
                 "clickers": base["clickers"],
                 "openers": base["openers"],
@@ -222,9 +222,9 @@ class Query:
                 "taux_cto": round(base['clickers'] / base['openers'] * 100 if base['openers'] else 0.0, 3),
                 "ca": ca_clean,
                 "ecpm": ecpm,
-                "date_shedule": [],
-                "SegmentId": base.get("segmentId"),
-                "subject": base.get("subject"),
+                "date_shedule": base.get("date_shedule"),
+                "SegmentId": base.get("SegmentId"),
+                "subject": base64.b64decode(base.get("subject")).decode("utf-8"),
                 "dimensions": base["dimensions"],
                 "analyses": base_analyses
             })
@@ -389,6 +389,7 @@ class Query:
             adv["taux_opens"] = round(adv["opens"] / sends * 100, 3) if sends else 0
             adv["taux_unsubs"] = round(adv["removals"] / sends * 100, 3) if sends else 0
             adv["taux_cto"] = round(adv["clicks"] / opens * 100, 3) if opens else 0
+            adv["classe"] = self.analyze.classify_advertiser(adv['ecpm'], adv["taux_clicks"])
 
             adv["analyses"] = {
                 "taux_clicks": self.analyze.analyze_click_rate(adv["taux_clicks"]),
@@ -615,59 +616,88 @@ class Query:
             print("erreur top 10", e)
             return {"top_10": []}
         
-        
     def advertiser_counts(self, adv_id: int):
-
-        def safe(v, fallback):
-            return v if v else fallback
-
         query = f"""
-            SELECT
-                gender,
-                age_range,
-                main_isp,
-                sum(sends) AS total
+            SELECT gender, age_range, main_isp, SUM(sends) AS total
             FROM reporting
             WHERE adv_id = {adv_id}
-            GROUP BY
-                gender,
-                age_range,
-                main_isp
+            GROUP BY gender, age_range, main_isp
         """
         rows = self._execute_query(query)
 
         result = {
             "advertiser_id": adv_id,
-            "counts": {
-                "by_gender": {},
-                "by_age_range": {},
-                "by_isp": {},
-                "by_gender_age": [],
-                "by_gender_age_isp": []
-            }
+            "totals": 0,
+            "details": []  
         }
 
         for r in rows:
-            gender = safe(r["gender"], "O_gender")
-            age = safe(r["age_range"], "O_age")
-            isp = safe(r["main_isp"], "O_isp")
+            gender = r["gender"] or "O_gender"
+            age_range = r["age_range"] or "O_age"
+            isp = r["main_isp"] or "O_isp"
             total = r["total"]
-            result["counts"]["by_gender"].setdefault(gender, 0)
-            result["counts"]["by_gender"][gender] += total
-            result["counts"]["by_age_range"].setdefault(age, 0)
-            result["counts"]["by_age_range"][age] += total
-            result["counts"]["by_isp"].setdefault(isp, 0)
-            result["counts"]["by_isp"][isp] += total
-            result["counts"]["by_gender_age"].append({
+
+            result["totals"] += total
+            result["details"].append({
                 "gender": gender,
-                "age_range": age,
-                "total": total
-            })
-            result["counts"]["by_gender_age_isp"].append({
-                "gender": gender,
-                "age_range": age,
+                "age_range": age_range,
                 "isp": isp,
                 "total": total
             })
 
+        def filter_counts(
+            gender: Optional[str] = None,
+            min_age: Optional[int] = None,
+            max_age: Optional[int] = None,
+            isp: Optional[str] = None
+        ):
+            total_filtered = 0
+
+            for item in result["details"]:
+
+                if gender and item["gender"] != gender:
+                    continue
+
+                if isp and item["isp"] != isp:
+                    continue
+
+                if min_age is not None or max_age is not None:
+                    try:
+                        start, end = map(int, item["age_range"].split('-'))
+                    except ValueError:
+                        continue
+
+                    if min_age is not None and end < min_age:
+                        continue
+                    if max_age is not None and start > max_age:
+                        continue
+
+                total_filtered += item["total"]
+                GENDER_LABELS = {
+                    "M": "Homme",
+                    "F": "Femme",
+                    "O_gender": "Inconnu"
+                }
+            label_parts = []
+
+            if gender:
+                label_parts.append(GENDER_LABELS.get(gender, gender))
+
+            if min_age is not None and max_age is not None:
+                label_parts.append(f"{min_age}-{max_age} ans")
+            elif min_age is not None:
+                label_parts.append(f"+{min_age} ans")
+            elif max_age is not None:
+                label_parts.append(f"-{max_age} ans")
+
+            if isp:
+                label_parts.append(isp)
+
+            label = " ".join(label_parts) if label_parts else "Total"
+
+            return {
+                "label": label,
+                "total": total_filtered
+            }
+        result["filter"] = filter_counts
         return result

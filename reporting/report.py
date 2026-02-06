@@ -4,8 +4,9 @@ from datetime import timedelta, datetime
 import pandas as pd
 import time
 import uuid
+import os
 from sqlalchemy import text
-
+from models.Events import Events
 class reporting:
 
     def __init__(self):
@@ -15,7 +16,7 @@ class reporting:
         self.date_end = pd.to_datetime("today").date()
         self.date_start = self.date_end - timedelta(days=90)
         self.batch_adv_size = 50
-        self.adv_ids = [4987] 
+        self.adv_ids =Events().get_adv_ids()
 
     def clean_adv_ids(self, adv_ids):
         return list(set([str(x).strip() for x in adv_ids if str(x).strip().isdigit()]))
@@ -32,36 +33,24 @@ class reporting:
             batch_str = ",".join(f"{x}" for x in batch)
 
             query = f"""
-                WITH last_runs AS (
-                    SELECT 
-                        adv_id,
-                        MessageId,
-                        event_type,
-                        MAX(run_id) AS max_run
-                    FROM events
-                    WHERE adv_id IN ({batch_str})
-                    AND Date BETWEEN '{self.date_start}' AND '{self.date_end}'
-                    GROUP BY adv_id, MessageId, event_type
-                )
-                SELECT
-                    e.database_id,
-                    e.MessageId AS id_routers,
-                    e.adv_id,
-                    e.dwh_id,
-                    e.SegmentId AS segmentId,
-                    e.MessageSubject AS subject,
-                    e.event_type,
-                    e.Date AS date_event,
-                    e.tag AS tag_id,
-                    e.brand
-                FROM events e
-                INNER JOIN last_runs lr
-                    ON e.adv_id = lr.adv_id
-                AND e.MessageId = lr.MessageId
-                AND e.event_type = lr.event_type
-                AND e.run_id = lr.max_run
-                WHERE e.adv_id IN ({batch_str})
-                AND e.Date BETWEEN '{self.date_start}' AND '{self.date_end}'
+              SELECT
+                    database_id,
+                    MessageId      AS id_routers,
+                    adv_id,
+                    dwh_id,
+                    SegmentId      AS segmentId,
+                    MessageSubject AS subject,
+                    event_type,
+                    Date           AS date_event,
+                    tag            AS tag_id,
+                    brand,
+                    client_id,
+                    ListId
+                FROM events_2
+                WHERE adv_id IN ({batch_str})
+                AND Date BETWEEN '{self.date_start}' AND '{self.date_end}'
+                QUALIFY
+                    run_id = max(run_id) OVER (PARTITION BY MessageId, event_type)
             """
             try:
                 r = self.clk.query(query)
@@ -73,62 +62,67 @@ class reporting:
 
         if not df_all:
             return pd.DataFrame()
-        return pd.concat(df_all, ignore_index=True)
+        df_events = pd.concat(df_all, ignore_index=True)
+        return df_events
 
-    def recupere_contacts(self, dwh_ids, max_retry=3, sleep_sec=2, insert_chunk=5000):
+    def recupere_contacts(self, dwh_ids, max_retry=3, sleep_sec=2, batch_size=5000):
+        cols = ["dwh_id", "age", "gender", "main_isp", "zipcode", "dep"]
+
         if not dwh_ids:
-            return pd.DataFrame(
-                columns=["dwh_id", "age", "gender", "main_isp", "zipcode", "dep"]
-            )
+            return pd.DataFrame(columns=cols)
 
-        last_exception = None
+        all_dfs = []
+        n = len(dwh_ids)
 
-        for attempt in range(1, max_retry + 1):
-            temp_table = f"tmp_dwh_{uuid.uuid4().hex}"
+        for i in range(0, n, batch_size):
+            batch_ids = dwh_ids[i:i + batch_size]
+            batch_str = ",".join(f"'{str(x)}'" for x in batch_ids)
+            last_exception = None
 
-            try:
-                self.clk.command(f"""
-                    CREATE TEMPORARY TABLE {temp_table}
-                    (
-                        dwh_id String
-                    )
-                    ENGINE = Memory
-                """)
-
-                for i in range(0, len(dwh_ids), insert_chunk):
-                    chunk = dwh_ids[i:i + insert_chunk]
-                    values = ",".join(f"('{str(x)}')" for x in chunk)
-                    self.clk.command(f"INSERT INTO {temp_table} VALUES {values}")
-
-                query = f"""
-                    SELECT
-                        t.dwh_id,
-                        argMax(age, updated_at) AS age,
-                        ifNull(argMax(gender, updated_at), 'O_gender') AS gender,
-                        ifNull(argMax(main_isp, updated_at), 'O_isp') AS main_isp,
-                        ifNull(argMax(zipcode, updated_at), 'O_zipcode') AS zipcode,
-                        ifNull(argMax(dep, updated_at), 'O_departement') AS dep
-                    FROM contacts c
-                    RIGHT JOIN {temp_table} t ON c.dwh_id = t.dwh_id
-                    GROUP BY t.dwh_id
-                """
-
-                r = self.clk.query(query)
-                df = pd.DataFrame(r.result_rows, columns=r.column_names)
-                return df
-
-            except Exception as e:
-                last_exception = e
-                print(f"Tentative {attempt}/{max_retry} échouée : {e}")
-                time.sleep(sleep_sec)
-
-            finally:
+            for attempt in range(1, max_retry + 1):
                 try:
-                    self.clk.command(f"DROP TABLE IF EXISTS {temp_table}")
-                except:
-                    pass
+                    query = f"""
+                        SELECT
+                            dwh_id,
+                            age,
+                            gender,
+                            main_isp,
+                            zipcode,
+                            dep
+                        FROM contacts_2
+                        PREWHERE dwh_id IN ({batch_str})
+                        ORDER BY updated_at DESC
+                        LIMIT 1 BY dwh_id
+                        SETTINGS optimize_read_in_order = 1
+                    """
+                    r = self.clk.query(query)
+                    df = pd.DataFrame(r.result_rows, columns=r.column_names)
 
-        raise RuntimeError(f"recupere_contacts a échoué après {max_retry} tentatives") from last_exception
+                    if not df.empty:
+                        
+                        for c in cols:
+                            if c not in df.columns:
+                                df[c] = None
+                        df["dwh_id"] = df["dwh_id"].astype(str)
+                        all_dfs.append(df)
+
+                    break  
+
+                except Exception as e:
+                    last_exception = e
+                    import traceback
+                    print(f"Tentative {attempt}/{max_retry} échouée : {e}")
+                    traceback.print_exc() 
+                    time.sleep(sleep_sec)
+                    print(f"Tentative {attempt}/{max_retry} échouée : {e}")
+                    time.sleep(sleep_sec)
+
+            else:
+                raise RuntimeError(f"recupere_contacts a échoué pour le batch {batch_ids}") from last_exception
+
+        if all_dfs:
+            return pd.concat(all_dfs, ignore_index=True)
+        return pd.DataFrame(columns=cols)
 
     def recupere_pg(self, adv_ids):
         adv_ids_clean = self.clean_adv_ids(adv_ids)
@@ -175,65 +169,98 @@ class reporting:
             print("Erreur Postgres:", e)
             return pd.DataFrame(columns=["id_routers","ca","date_shedule"])
 
-    def report(self):
-        print('advertisers', self.adv_ids)
+    def report(self,journal="journal.txt"):
+        df_final_all = []
+        if os.path.exists(journal):
+            with open(journal,'r') as f:
+                process_adv = set(int(line.strip()) for line in f.readlines())
+        else:
+            process_adv = set()
 
-        print("Récupération EVENTS")
-        df_events = self.recupere_events(self.adv_ids)
-        if df_events.empty:
-            print("Aucun événement récupéré")
-            return pd.DataFrame()
+        for adv_id in self.adv_ids:
+            if adv_id in process_adv:
+                continue
+            print(f"Traitement advertiser {adv_id}")
+            print("recup events")
+            df_events = self.recupere_events([adv_id])
+            if df_events.empty:
+                print(f"Aucun événement pour advertiser {adv_id}")
+                continue
 
-        print("Récupération CONTACTS")
-        dwh_ids = df_events["dwh_id"].dropna().unique().tolist()
-        df_contacts = self.recupere_contacts(dwh_ids)
-        if df_contacts.empty:
-            print("aucun contact")
-        print("Récupération focus")
-        df_pg = self.recupere_pg(self.adv_ids)
-        if df_pg.empty:
-            df_pg = pd.DataFrame(columns=["id_routers","ca"])
+            event_types = ["Sends", "Opens", "Clicks", "Removals", "Complaints", "Bounces"]
+            for ev in event_types:
+                df_events[ev.lower()] = (df_events["event_type"] == ev).astype(int)
+            dwh_ids = df_events["dwh_id"].dropna().unique().tolist()
+            print("recup contacts")
+            df_contacts = self.recupere_contacts(dwh_ids)
+            print("recup focus")
+            df_pg = self.recupere_pg([adv_id])
+            if df_pg.empty:
+                df_pg = pd.DataFrame(columns=["id_routers", "ca", "date_shedule"])
+            
+            if not df_pg.empty:
+                df_pg_grouped = df_pg.groupby("id_routers", observed=True).agg(
+                    ca=("ca", "max"),
+                    date_shedule=("date_shedule", lambda x: sorted({d for sub in x if isinstance(sub, list) for d in sub}))
+                ).reset_index()
+            else:
+                df_pg_grouped = pd.DataFrame(columns=["id_routers", "ca", "date_shedule"])
 
-        df_events["id_routers"] = df_events["id_routers"].astype(str).fillna("O_router")
-        df_pg["id_routers"] = df_pg["id_routers"].astype(str).fillna("O_router")
-        df = df_events.merge(df_contacts,on="dwh_id",how="left")
-        df = df.merge(df_pg, on="id_routers", how="left")
-        bins = [0,18,24,34,44,54,64,74,200]
-        labels = ['0-18','18-24','25-34','35-44','45-54','55-64','65-74','75+']
-        df["age_range"] = pd.cut(df["age"], bins=bins, labels=labels)
-        df["age_range"] = df["age_range"].cat.add_categories("O_age").fillna("O_age")
-        df["gender"] = df["gender"].fillna("O_gender").replace("O","O_gender")
-        df["main_isp"] = df["main_isp"].fillna("O_isp").replace("Other","O_isp")
-        df["age_civilite_isp"] = df["age_range"].astype(str) + "_" + df["gender"].astype(str) + "_" + df["main_isp"].astype(str)
-        df["ca"] = df["ca"].fillna(0.0)
-        for col in ["zipcode", "dep"]:
-            df[col] = df[col].astype(str)
-            if col not in df.columns:
-                df[col] = "Inconnu"
-        event_types = ["Sends","Opens","Clicks","Removals","Complaints","Bounces"]
-        for ev in event_types:
-            df[ev.lower()] = (df["event_type"] == ev).astype(int)
-        group_cols = ["database_id","segmentId","adv_id","id_routers","tag_id","brand",
-                    "age_range","gender","main_isp","age_civilite_isp","zipcode","dep"]
+            df_events["id_routers"] = df_events["id_routers"].astype(str).fillna("O_router")
+            df_pg_grouped["id_routers"] = df_pg_grouped["id_routers"].astype(str).fillna("O_router")
 
-        df["date_shedule"] = df["date_shedule"].apply(lambda x: x if isinstance(x, list) else [])
+            df = df_events.merge(df_contacts, on="dwh_id", how="left")
+            df = df.merge(df_pg_grouped, on="id_routers", how="left")
 
-        df_grouped = df.groupby(group_cols, observed=True).agg(
-            sends=("sends","sum"),
-            opens=("opens","sum"),
-            clicks=("clicks","sum"),
-            removals=("removals","sum"),
-            complaints=("complaints","sum"),
-            bounces=("bounces","sum"),
-            ca=("ca","max"),
-            subject=("subject","first"),
-            date_event=("date_event","first"),
-            date_shedule=("date_shedule",lambda x: sorted({ d for sub in x if isinstance(sub, list) for d in sub}))
-        ).reset_index()
-        df_grouped = df_grouped[df_grouped['sends']>0].reset_index(drop=True)
-        df_grouped['updated_at'] = datetime.now()
-        print("INSERTION")
-        df_grouped.to_csv('testes.csv',index=False,sep=';')
+            bins = [0, 18, 24, 34, 44, 54, 64, 74, 200]
+            labels = ['0-18', '18-24', '25-34', '35-44', '45-54', '55-64', '65-74', '75+']
+            df["age_range"] = pd.cut(df["age"], bins=bins, labels=labels)
+            df["age_range"] = df["age_range"].cat.add_categories("O_age").fillna("O_age")
+            df["gender"] = df["gender"].fillna("O_gender").replace("O", "O_gender")
+            df["main_isp"] = df["main_isp"].fillna("O_isp").replace("Other", "O_isp")
+            df["age_civilite_isp"] = df["age_range"].astype(str) + "_" + df["gender"].astype(str) + "_" + df["main_isp"].astype(str)
+            df["ca"] = df["ca"].astype(float).fillna(0.0)
+
+            for col in ["zipcode", "dep"]:
+                if col not in df.columns:
+                    df[col] = "Inconnu"
+                df[col] = df[col].astype(str)
+
+            df["date_shedule"] = df["date_shedule"].apply(lambda x: x if isinstance(x, list) else [])
+
+            group_cols = ["database_id", "segmentId", "adv_id", "id_routers", "tag_id", "brand","client_id","ListId", "zipcode", "dep","age_range", "gender", "main_isp", "age_civilite_isp"]
+
+            df_grouped = df.groupby(group_cols, observed=True).agg(
+                sends=("sends", "sum"),
+                opens=("opens", "sum"),
+                clicks=("clicks", "sum"),
+                removals=("removals", "sum"),
+                complaints=("complaints", "sum"),
+                bounces=("bounces", "sum"),
+                ca=("ca", "max"),
+                subject=("subject", "first"),
+                date_event=("date_event", "first"),
+                date_shedule=("date_shedule", lambda x: sorted({d for sub in x if isinstance(sub, list) for d in sub}))
+            ).reset_index()
+
+            df_grouped = df_grouped[df_grouped['sends'] > 0].reset_index(drop=True)
+            df_grouped['updated_at'] = datetime.now()
+
+            print(f"Insertion de l'advertiser: {adv_id}")
+            #df_grouped.to_csv('grouped.csv',index=False,sep=';')
+            batch_size = 5000
+            for i in range(0, len(df_grouped), batch_size):
+                chunk = df_grouped[i:i+batch_size]
+                self.clk.insert_df(self.table, chunk)
+            
+            with open(journal, "a") as f:
+                f.write(f"{adv_id}\n")
+            process_adv.add(adv_id)
+            df_final_all.append(df_grouped)
+            time.sleep(3)
+        if df_final_all:
+            return pd.concat(df_final_all, ignore_index=True)
+        return pd.DataFrame()
 
     def run(self, max_retry=3, sleep_sec=5):
         last_exception = None

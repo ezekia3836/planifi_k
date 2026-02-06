@@ -11,11 +11,10 @@ from models.Tags_advertiser import TagsAdvertiser
 from models.query import Query
 from datetime import datetime
 from cron.Cron import Cron
-import json
-import time
+from reporting.router import router as reporting_router
+from typing import Optional
 tgadv = TagsAdvertiser()
-query = Query()
-# Configuration CORS
+
 origins = [
     "http://localhost",
     "http://localhost:3000",  
@@ -35,78 +34,12 @@ app.add_middleware(
 )
 
 app.include_router(database_router.router, prefix="/database", tags=["Database"])
+app.include_router(reporting_router)
 
 @app.get("/")
 def read_root():
     return {"message": "Bienvenue sur FastAPI !"}
 
-
-@app.get("/tags")
-@cache(expire=60)
-async def get_tags():
-    print("DB")
-    return tgadv.read_tags()
-
-@app.get("/tags/{id}")
-async def get_tags_byId(id:int):
-    return tgadv.get_tags_byId(id)
-
-@app.get("/advertiser")
-@cache(expire=60)
-async def get_advertiser():
-    print("db")
-    return tgadv.read_advertiser()
-
-@app.get("/advertiser/{id}")
-async def get_advertiser_byid(id:int):
-    return tgadv.get_advertiser_byid(id)
-
-@app.get("/search_advertiser/{keywords}")
-async def search_advertiser(keywords:str):
-    return tgadv.search_advertiser(keywords)
-
-@app.get("/reporting/router/{router}")
-@cache(expire=60)
-async def get_report(router:int ,adv:int):
-    return tgadv.reporting(router,adv)
-
-@app.get("/reporting/adv/{adv}")
-@cache(expire=60)
-async def get_report_advertiser(adv):
-    data = query.global_advertiser(adv)
-    return data
-
-@app.get("/reporting/db/{db_id}")
-@cache(expire=60)
-async def get_report_db(db_id:int):
-    return query.global_base(db_id)
-
-@app.get('/reporting/calendrier/{adv}')
-@cache(expire=60)
-async def calendrier(adv):
-    return query.calendrier(adv_id=adv)
-
-@app.get('/reporting/prog/{adv}')
-@cache(expire=60)
-async def propgramme(adv:int):
-    return query.programmes(adv)
-
-@app.get('/reporting/list_advertiser/')
-@cache(expire=60)
-async def list_advertiser():
-    return query.list_advertiser()
-@app.get('/reporting/list_tags/')
-@cache(expire=60)
-async def list_tags():
-    return query.list_tags()
-@app.get('/reporting/top/')
-@cache(expire=60)
-async def top_10_object():
-    return query.top_10_objet()
-@app.get('/reporting/compte/{adv}')
-@cache(expire=60)
-async def comptage(adv:int):
-    return query.advertiser_counts(adv)
 def job_cron():
     start = datetime.now()
     cron = Cron()
