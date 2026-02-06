@@ -113,3 +113,21 @@ class CountFilter(BaseModel):
 class CountFilterResponse(BaseModel):
     adv_id:int
     comptage:Optional[CountFilter]=None
+
+class ListTags(BaseModel):
+    id:int
+    name:str
+    dwtag:str
+
+class ListTagsResponse(BaseModel):
+    total:int
+    tags:List[ListTags]
+
+class ListAdvertisers(BaseModel):
+    id:int
+    name:str
+
+class ListAdvertisersResponse(BaseModel):
+    total:int
+    advertisers:List[ListAdvertisers]
+

@@ -5,7 +5,9 @@ from fastapi_cache.decorator import cache
 from reporting.schema import (
     GlobalAdvertiserResponse,
     GlobalBaseResponse,
-    CountFilterResponse
+    CountFilterResponse,
+    ListAdvertisersResponse,
+    ListTagsResponse
 )
 query = Query()
 router = APIRouter(
@@ -23,22 +25,17 @@ async def get_report_advertiser(adv: int):
 async def get_report_db(db_id: int):
     return query.global_base(db_id)
 
-@router.get("/calendrier/{adv}", summary="Calendrier d'un advertiser")
-@cache(expire=60)
-async def calendrier(adv: int):
-    return query.calendrier(adv_id=adv)
-
 @router.get("/prog/{adv}", summary="Programme d'un advertiser")
 @cache(expire=60)
 async def programme(adv: int):
     return query.programmes(adv)
 
-@router.get("/list_advertiser/", summary="Liste des advertisers")
+@router.get("/list_advertiser/", summary="Liste des advertisers",response_model=ListAdvertisersResponse)
 @cache(expire=60)
 async def list_advertiser():
     return query.list_advertiser()
 
-@router.get("/list_tags/", summary="Liste des tags")
+@router.get("/list_tags/", summary="Liste des tags",response_model=ListTagsResponse)
 @cache(expire=60)
 async def list_tags():
     return query.list_tags()
