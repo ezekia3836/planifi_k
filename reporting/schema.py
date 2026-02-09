@@ -3,17 +3,19 @@ from typing import Dict, List, Optional,Any
 from datetime import date
 
 class Analyses(BaseModel):
-    taux_clicks:str
+    taux_clickers:str
     taux_cto:str
     taux_unsubs:str
 
 class Stats(BaseModel):
     sends: int
+    clicks:int
     clickers: int
+    opens:int
     openers: int
     unsubs: int
     complaints: int
-    taux_clicks: float
+    taux_clickers: float
     taux_cto: float
     taux_unsubs: float
 
@@ -31,13 +33,17 @@ class BaseItem(BaseModel):
     id_routers: str
     tag_id: int
     brand: str
+    id_focus:int
+    client_id:int
     sends: int
+    clicks:int
     clickers: int
+    opens:int
     openers: int
     unsubs: int
     complaints: int
-    taux_clicks: float
-    taux_opens: float
+    taux_clickers: float
+    taux_openers: float
     taux_unsubs: float
     taux_cto: float
     ca: float
@@ -51,16 +57,19 @@ class BaseItem(BaseModel):
 
 class GlobalAdvertiserStats(BaseModel):
     sends: int=0
+    clicks:int=0
     clickers: int=0
+    opens:int=0
     openers: int=0
     unsubs: int=0
     complaints: int=0
     ecpm: float=0.0
     ca: float=0.0
-    taux_clicks: float=0.0
-    taux_opens: float=0.0
+    taux_clickers: float=0.0
+    taux_openers: float=0.0
     taux_unsubs: float=0.0
     taux_cto: float=0.0
+    analyses:Analyses={}
 
 class GlobalAdvertiserResponse(BaseModel):
     advertiser_id:str
@@ -68,34 +77,43 @@ class GlobalAdvertiserResponse(BaseModel):
     bases:List[BaseItem]
 
 class GobalBaseStats(BaseModel):
-    sends_total:int
-    clicks_total:int
-    opens_total:int
-    removals_total:int
-    ca_total:int
-    ecpm:float
-    taux_clicks:float
-    taux_opens:float
-    taux_unsubs:float
-    taux_cto:float
-    taux_unsubs:float
-    analyses:Analyses
+    sends_total:int=0
+    clicks_total:int=0
+    clickers_total:int=0
+    opens_total:int=0
+    openers_total:int=0
+    removals_total:int=0
+    ca_total:int=0
+    ecpm:float=0.0
+    taux_clickers:float=0.0
+    taux_openers:float=0.0
+    taux_unsubs:float=0.0
+    taux_cto:float=0.0
+    taux_unsubs:float=0.0
+    analyses:Analyses={}
 
 class AdvertiserItem(BaseModel):
     advertiser_id:str
+    client_id:int
+    id_focus:int
+    tag:int
+    brand:str
     sends:int
     clicks:int
+    clickers:int
     opens:int
+    openers:int
     removals:int
     ca:int
-    dimensions:Dimensions
     ecpm:float
-    taux_clicks:float
-    taux_opens:float
+    taux_clickers:float
+    taux_openers:float
     taux_unsubs:float
     taux_cto:float
     classe:str
     analyses:Analyses
+    dimensions:Dimensions
+    
 
 class GlobalBaseResponse(BaseModel):
     database_id:str

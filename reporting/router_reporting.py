@@ -2,6 +2,7 @@ from models.query import Query
 from fastapi import APIRouter,Depends
 from typing import Optional
 from fastapi_cache.decorator import cache 
+from fastapi_cache.backends.inmemory import InMemoryBackend
 from reporting.security import verify_internal_token
 from reporting.schema import (
     GlobalAdvertiserResponse,
@@ -30,10 +31,10 @@ async def get_report_db(db_id: int):
 @cache(expire=60)
 async def programme(adv: int):
     return query.programmes(adv)
-@router.get("/top/", summary="Top 10 objets")
+"""@router.get("/top/", summary="Top 10 objets")
 @cache(expire=60)
 async def top_10_object():
-    return query.top_10_objet()
+    return query.top_10_objet()"""
 
 @router.get("/{adv_id}/counts", summary="Comptage par filtre(age,genre,isp)", response_model=CountFilterResponse)
 def get_advertiser_counts(adv_id: int, gender: Optional[str] = None, min_age: Optional[int] = None, max_age: Optional[int] = None, isp: Optional[str] = None):

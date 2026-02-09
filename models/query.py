@@ -60,12 +60,16 @@ class Query:
                 age_civilite_isp,
                 SUM(sends) AS sends,
                 SUM(clicks) AS clicks,
+                SUM(clickers) AS clickers,
                 SUM(opens) AS opens,
+                SUM(openers) AS openers,
                 SUM(removals) AS removals,
                 SUM(complaints) AS complaints,
                 MAX(ca) AS ca,
                 segmentId,
-                subject
+                subject,
+                client_id,
+                id_focus
             FROM reporting
             WHERE adv_id = {adv_id}
             GROUP BY
@@ -79,7 +83,9 @@ class Query:
                 tag_id,
                 date_shedule,
                 segmentId,
-                subject
+                subject,
+                client_id,
+                id_focus
         """
         rows = self._execute_query(query)
         if not rows:
@@ -89,19 +95,25 @@ class Query:
         total_sends_global = 0
         total_ca_global = 0
         total_clickers_global = 0
+        total_clicks_global = 0
         total_openers_global = 0
+        total_opens_global = 0
         total_unsubs_global = 0
         total_complaints_global = 0
 
         for r in rows:
-            base_key = (r["database_id"], r["id_routers"], r['tag_id'], r['brand'],r['segmentId'])
+            base_key = (r["database_id"], r["id_routers"], r['tag_id'], r['brand'],r['segmentId'],r['client_id'],r['id_focus'])
             base = bases.setdefault(base_key, {
                 "database_id": r["database_id"],
                 "id_routers": r["id_routers"],
                 "tag_id": r['tag_id'],
                 "brand": r['brand'],
+                "client_id":r['client_id'],
+                "id_focus":r['id_focus'],
                 "sends": 0,
+                "clicks":0,
                 "clickers": 0,
+                "opens":0,
                 "openers": 0,
                 "unsubs": 0,
                 "complaints": 0,
@@ -118,15 +130,19 @@ class Query:
             })
 
             sends = r["sends"]
+            clickers = r["clickers"]
             clicks = r["clicks"]
             opens = r["opens"]
+            openers = r["openers"]
             removals = r["removals"]
             complaints = r["complaints"]
             ca = r["ca"]
 
             base["sends"] += sends
-            base["clickers"] += clicks
-            base["openers"] += opens
+            base["clickers"] += clickers
+            base["clicks"] += clicks
+            base["openers"] += openers
+            base["opens"] +=opens
             base["unsubs"] += removals
             base["complaints"] += complaints
             base["ca"] += ca
@@ -135,8 +151,10 @@ class Query:
 
             total_sends_global += sends
             total_ca_global += ca
-            total_clickers_global += clicks
-            total_openers_global += opens
+            total_clicks_global += clicks
+            total_clickers_global += clickers
+            total_opens_global += opens
+            total_openers_global += openers
             total_unsubs_global += removals
             total_complaints_global += complaints
 
@@ -145,14 +163,18 @@ class Query:
                     return
                 seg = base["dimensions"][dim].setdefault(value, {
                     "sends": 0,
+                    "clicks":0,
                     "clickers": 0,
+                    "opens":0,
                     "openers": 0,
                     "unsubs": 0,
                     "complaints": 0
                 })
                 seg["sends"] += sends
-                seg["clickers"] += clicks
-                seg["openers"] += opens
+                seg['clicks'] +=clicks
+                seg["clickers"] += clickers
+                seg["opens"] += opens
+                seg["openers"] += openers
                 seg["unsubs"] += removals
                 seg["complaints"] += complaints
 
@@ -160,37 +182,48 @@ class Query:
             push("gender", r["gender"])
             push("isp", r["main_isp"])
             push("age_civilite_isp", r["age_civilite_isp"])
+        taux_clickers = round(total_clickers_global / total_sends_global * 100 if total_sends_global else 0, 3)
+        taux_openers = round(total_openers_global / total_sends_global * 100 if total_sends_global else 0, 3)
+        taux_unsubs = round(total_unsubs_global / total_sends_global * 100 if total_sends_global else 0, 3)
+        taux_cto = round(total_clickers_global / total_openers_global * 100 if total_openers_global else 0, 3)
+        analyses = {
+            "taux_clickers": self.analyze.analyze_click_rate(taux_clickers),
+            "taux_cto": self.analyze.analyze_cto_rate(taux_cto,total_openers_global),
+            "taux_unsubs":self.analyze.analyze_unsub_rate(taux_unsubs)
+        }
         result = {
             "advertiser_id": str(adv_id),
             "globales": {
                 "sends": total_sends_global,
+                "clicks": total_clicks_global,
                 "clickers": total_clickers_global,
+                "opens": total_opens_global,
                 "openers": total_openers_global,
                 "unsubs": total_unsubs_global,
                 "complaints": total_complaints_global,
                 "ecpm": round((total_ca_global / total_sends_global * 1000) if total_sends_global else 0, 3),
                 "ca": round(total_ca_global, 2),
-                "taux_clicks": round(total_clickers_global / total_sends_global * 100 if total_sends_global else 0, 3),
-                "taux_opens": round(total_openers_global / total_sends_global * 100 if total_sends_global else 0, 3),
-                "taux_unsubs": round(total_unsubs_global / total_sends_global * 100 if total_sends_global else 0, 3),
-                "taux_cto": round(total_clickers_global / total_openers_global * 100 if total_openers_global else 0, 3)
+                "taux_clickers": taux_clickers,
+                "taux_openers": taux_openers,
+                "taux_unsubs": taux_unsubs,
+                "taux_cto": taux_cto,
+                "analyses":analyses
             },
             "bases": []
         }
         for base in bases.values():
             if base["sends"] <= 0:
                 continue
-
             ca_clean = round(base["ca"], 2)
             ecpm = round((ca_clean / base["sends"]) * 1000 if base["sends"] else 0, 3)
 
             for dim_name, dim_values in base["dimensions"].items():
                 for seg in dim_values.values():
-                    seg["taux_clicks"] = round(seg["clickers"] / seg["sends"] * 100 if seg["sends"] else 0, 3)
+                    seg["taux_clickers"] = round(seg["clickers"] / seg["sends"] * 100 if seg["sends"] else 0, 3)
                     seg["taux_cto"] = round(seg["clickers"] / seg["openers"] * 100 if seg["openers"] else 0, 3)
                     seg["taux_unsubs"] = round(seg["unsubs"] / seg["sends"] * 100 if seg["sends"] else 0, 3)
                     seg["analyses"] = {
-                        "taux_clicks": self.analyze.analyze_click_rate(seg["taux_clicks"]),
+                        "taux_clickers": self.analyze.analyze_click_rate(seg["taux_clickers"]),
                         "taux_cto": self.analyze.analyze_cto_rate(seg["taux_cto"], seg["openers"]),
                         "taux_unsubs": self.analyze.analyze_unsub_rate(seg["taux_unsubs"])
                     }
@@ -199,10 +232,8 @@ class Query:
             )
 
             base_analyses = {
-                "taux_clicks": self.analyze.analyze_click_rate(base["clickers"] / base["sends"] * 100),
-                "taux_cto": self.analyze.analyze_cto_rate(
-                    base["clickers"] / base["openers"] * 100 if base["openers"] else 0, base["openers"]
-                ),
+                "taux_clickers": self.analyze.analyze_click_rate(base["clickers"] / base["sends"] * 100),
+                "taux_cto": self.analyze.analyze_cto_rate(base["clickers"] / base["openers"] * 100 if base["openers"] else 0, base["openers"]),
                 "taux_unsubs": self.analyze.analyze_unsub_rate(base["unsubs"] / base["sends"] * 100)
             }
 
@@ -210,14 +241,18 @@ class Query:
                 "database_id": base["database_id"],
                 "id_routers": base["id_routers"],
                 "tag_id": base['tag_id'],
+                "client_id":base['client_id'],
+                "id_focus":base['id_focus'],
                 "brand": base64.b64decode(base['brand']).decode("utf-8"),
                 "sends": base["sends"],
+                "clicks":base['clicks'],
                 "clickers": base["clickers"],
+                "opens": base['opens'],
                 "openers": base["openers"],
                 "unsubs": base["unsubs"],
                 "complaints": base["complaints"],
-                "taux_clicks": round(base['clickers'] / base['sends'] * 100 if base['sends'] else 0.0, 3),
-                "taux_opens": round(base['openers'] / base['sends'] * 100 if base['sends'] else 0.0, 3),
+                "taux_clickers": round(base['clickers'] / base['sends'] * 100 if base['sends'] else 0.0, 3),
+                "taux_openers": round(base['openers'] / base['sends'] * 100 if base['sends'] else 0.0, 3),
                 "taux_unsubs": round(base['unsubs'] / base['sends'] * 100 if base['sends'] else 0.0, 3),
                 "taux_cto": round(base['clickers'] / base['openers'] * 100 if base['openers'] else 0.0, 3),
                 "ca": ca_clean,
@@ -255,9 +290,15 @@ class Query:
                 age_civilite_isp,
                 sum(sends)     AS sends,
                 sum(clicks)    AS clicks,
+                sum(clickers)  AS clickers,
                 sum(opens)     AS opens,
+                sum(openers)   AS openers,
                 sum(removals)  AS removals,
-                max(ca)        AS ca
+                max(ca)        AS ca,
+                client_id,
+                id_focus,
+                tag_id,
+                brand
             FROM reporting
             WHERE database_id = {db_id}
             GROUP BY
@@ -266,9 +307,12 @@ class Query:
                 age_range,
                 gender,
                 main_isp,
-                age_civilite_isp
+                age_civilite_isp,
+                client_id,
+                id_focus,
+                tag_id,
+                brand
         """
-
         rows = self._execute_query(query)
 
         result = {
@@ -276,7 +320,9 @@ class Query:
             "globale_base": {
                 "sends_total": 0,
                 "clicks_total": 0,
+                "clickers_total":0,
                 "opens_total": 0,
+                "openers_total":0,
                 "removals_total": 0,
                 "ca_total": 0.0
             },
@@ -285,7 +331,6 @@ class Query:
 
         advertisers = {}
         routers_seen = set()
-
         for r in rows:
 
             adv_id = str(r["adv_id"])
@@ -293,7 +338,9 @@ class Query:
 
             sends = r["sends"]
             clicks = r["clicks"]
+            clickers = r["clickers"]
             opens = r["opens"]
+            openers = r["openers"]
             removals = r["removals"]
             ca = r["ca"]
 
@@ -301,7 +348,9 @@ class Query:
 
             g["sends_total"] += sends
             g["clicks_total"] += clicks
+            g["clickers_total"] += clickers
             g["opens_total"] += opens
+            g["openers_total"] += openers
             g["removals_total"] += removals
 
             if router not in routers_seen:
@@ -311,9 +360,15 @@ class Query:
             adv = advertisers.setdefault(adv_id, {
                 "advertiser_id": adv_id,
                 "routers_seen": set(),
+                "client_id":r['client_id'],
+                "id_focus":r['id_focus'],
+                "tag":r['tag_id'],
+                "brand":base64.b64decode(r["brand"]).decode("utf-8"),
                 "sends": 0,
                 "clicks": 0,
+                "clickers": 0,
                 "opens": 0,
+                "openers": 0,
                 "removals": 0,
                 "ca": 0.0,
                 "dimensions": {
@@ -330,7 +385,9 @@ class Query:
 
             adv["sends"] += sends
             adv["clicks"] += clicks
+            adv["clickers"] += clickers
             adv["opens"] += opens
+            adv["openers"] += openers
             adv["removals"] += removals
 
             dims = {
@@ -343,20 +400,24 @@ class Query:
             for dim, val in dims.items():
                 seg = adv["dimensions"][dim].setdefault(val, {
                     "sends": 0,
+                    "clicks":0,
                     "clickers": 0,
+                    "opens":0,
                     "openers": 0,
                     "unsubs": 0
                 })
 
                 seg["sends"] += sends
-                seg["clickers"] += clicks
-                seg["openers"] += opens
+                seg["clicks"] += clicks
+                seg["clickers"] += clickers
+                seg["opens"] += opens
+                seg["openers"] += openers
                 seg["unsubs"] += removals
-                seg['taux_clicks'] = round(seg['clickers'] / seg['sends'] *100 if seg['sends'] else 0.0,3)
+                seg['taux_clickers'] = round(seg['clickers'] / seg['sends'] *100 if seg['sends'] else 0.0,3)
                 seg['taux_cto'] = round(seg['clickers'] / seg['openers'] if seg['openers'] else 0.0 ,3)
                 seg['taux_unsubs'] = round(seg['unsubs'] / seg['sends'] if seg['sends'] else 0.0,3)
                 analyse_seg={
-                    "taux_clicks":self.analyze.analyze_click_rate(seg['taux_clicks']),
+                    "taux_clickers":self.analyze.analyze_click_rate(seg['taux_clickers']),
                     "taux_cto": self.analyze.analyze_cto_rate(seg['taux_cto'],seg['openers']),
                     "taux_unsubs":self.analyze.analyze_unsub_rate(seg['unsubs'])
                 }
@@ -365,16 +426,16 @@ class Query:
         g = result["globale_base"]
 
         sends = g["sends_total"]
-        opens = g["opens_total"]
+        openers = g["openers_total"]
 
         g["ecpm"] = round((g["ca_total"] / sends) * 1000, 3) if sends else 0
-        g["taux_clicks"] = round(g["clicks_total"] / sends * 100, 3) if sends else 0
-        g["taux_opens"] = round(g["opens_total"] / sends * 100, 3) if sends else 0
+        g["taux_clickers"] = round(g["clickers_total"] / sends * 100, 3) if sends else 0
+        g["taux_openers"] = round(g["openers_total"] / sends * 100, 3) if sends else 0
         g["taux_unsubs"] = round(g["removals_total"] / sends * 100, 3) if sends else 0
-        g["taux_cto"] = round(g["clicks_total"] / opens * 100, 3) if opens else 0
+        g["taux_cto"] = round(g["clickers_total"] / openers * 100, 3) if opens else 0
 
         g["analyses"] = {
-            "taux_clicks": self.analyze.analyze_click_rate(g["taux_clicks"]),
+            "taux_clickers": self.analyze.analyze_click_rate(g["taux_clickers"]),
             "taux_cto": self.analyze.analyze_cto_rate(g["taux_cto"], opens),
             "taux_unsubs": self.analyze.analyze_unsub_rate(g["taux_unsubs"])
         }
@@ -382,17 +443,17 @@ class Query:
         for adv in advertisers.values():
 
             sends = adv["sends"]
-            opens = adv["opens"]
+            openers = adv["openers"]
 
             adv["ecpm"] = round((adv["ca"] / sends) * 1000, 3) if sends else 0
-            adv["taux_clicks"] = round(adv["clicks"] / sends * 100, 3) if sends else 0
-            adv["taux_opens"] = round(adv["opens"] / sends * 100, 3) if sends else 0
+            adv["taux_clickers"] = round(adv["clickers"] / sends * 100, 3) if sends else 0
+            adv["taux_openers"] = round(adv["openers"] / sends * 100, 3) if sends else 0
             adv["taux_unsubs"] = round(adv["removals"] / sends * 100, 3) if sends else 0
-            adv["taux_cto"] = round(adv["clicks"] / opens * 100, 3) if opens else 0
-            adv["classe"] = self.analyze.classify_advertiser(adv['ecpm'], adv["taux_clicks"])
+            adv["taux_cto"] = round(adv["clickers"] / openers * 100, 3) if opens else 0
+            adv["classe"] = self.analyze.classify_advertiser(adv['ecpm'], adv["taux_clickers"])
 
             adv["analyses"] = {
-                "taux_clicks": self.analyze.analyze_click_rate(adv["taux_clicks"]),
+                "taux_clickers": self.analyze.analyze_click_rate(adv["taux_clickers"]),
                 "taux_cto": self.analyze.analyze_cto_rate(adv["taux_cto"], opens),
                 "taux_unsubs": self.analyze.analyze_unsub_rate(adv["taux_unsubs"])
             }
@@ -405,7 +466,6 @@ class Query:
         return result
 
     def calendrier(self, adv_id):
-
         top_months = 3       
         seuil_ecpm = 0      
 
@@ -566,10 +626,10 @@ class Query:
                     "advertisers": []
                 }
    
-    def top_10_objet(self):
+    """def top_10_objet(self):
         try:
-            query = """
-                SELECT
+            query = 
+                SELECT DISTINCT
                     database_id,
                     subject,
                     id_routers,
@@ -579,7 +639,7 @@ class Query:
                     ca,
                     ROUND(ca / sends * 1000, 2) AS ecpm
                 FROM (
-                    SELECT
+                    SELECT DISTINCT
                         database_id,
                         subject,
                         id_routers,
@@ -593,7 +653,7 @@ class Query:
                 ) AS aggregated
                 ORDER BY clicks DESC, ecpm DESC, ca DESC, opens DESC
                 LIMIT 10
-            """
+            
             rows = self._execute_query(query)
 
             top_10 = []
@@ -614,9 +674,8 @@ class Query:
 
         except Exception as e:
             print("erreur top 10", e)
-            return {"top_10": []}
+            return {"top_10": []}"""
         
-
     def advertiser_counts(self, adv_id: int):
         query = f"""
             SELECT gender, age_range, main_isp, SUM(sends) AS total
@@ -637,7 +696,6 @@ class Query:
             age_range = r["age_range"] or "O_age"
             isp = r["main_isp"] or "O_isp"
             total = r["total"] or 0
-
             result["totals"] += total
             result["details"].append({
                 "gender": gender,

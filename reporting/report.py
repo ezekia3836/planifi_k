@@ -3,7 +3,6 @@ from config.ClickHouseConfig import ClickHouseConfig
 from datetime import timedelta, datetime
 import pandas as pd
 import time
-import uuid
 import os
 from sqlalchemy import text
 from models.Events import Events
@@ -133,6 +132,7 @@ class reporting:
 
         query = text(f"""
             SELECT
+                vd.id AS id_focus,
                 vd.campaingkind AS ca,
                 COALESCE(json_agg(DISTINCT vd.date_shedule), '[]'::json) AS date_shedule,
                 COALESCE(json_agg(DISTINCT idsendouts.idsendout), '[]'::json) AS id_routers
@@ -155,7 +155,7 @@ class reporting:
             ) AS idsendouts ON TRUE
             WHERE st.id = 5
             AND vd.advertiser IN ({adv_ids_str})
-            GROUP BY vd.campaingkind
+            GROUP BY vd.campaingkind,vd.id
         """)
         try:
             with self.pg.connect() as conn:
@@ -164,10 +164,10 @@ class reporting:
             df["id_routers"] = df["id_routers"].apply(lambda x: x or [])
             df = df.explode("id_routers")
             df["id_routers"] = df["id_routers"].astype(str)
-            return df[["id_routers","ca","date_shedule"]]
+            return df[["id_focus","id_routers","ca","date_shedule"]]
         except Exception as e:
             print("Erreur Postgres:", e)
-            return pd.DataFrame(columns=["id_routers","ca","date_shedule"])
+            return pd.DataFrame(columns=["id_focus","id_routers","ca","date_shedule"])
 
     def report(self,journal="journal.txt"):
         df_final_all = []
@@ -183,7 +183,6 @@ class reporting:
             print(f"Traitement advertiser {adv_id}")
             print("recup events")
             df_events = self.recupere_events([adv_id])
-            df_events.to_csv('events_50.csv',index=False,sep=';')
             if df_events.empty:
                 print(f"Aucun événement pour advertiser {adv_id}")
                 continue
@@ -191,6 +190,17 @@ class reporting:
             event_types = ["Sends", "Opens", "Clicks", "Removals", "Complaints", "Bounces"]
             for ev in event_types:
                 df_events[ev.lower()] = (df_events["event_type"] == ev).astype(int)
+            df_opens = df_events[df_events['event_type'] == 'Opens'][['adv_id', 'id_routers', 'dwh_id']].drop_duplicates()
+            df_opens['opener'] = 1
+
+            df_clicks = df_events[df_events['event_type'] == 'Clicks'][['adv_id', 'id_routers', 'dwh_id']].drop_duplicates()
+            df_clicks['clicker'] = 1
+
+            df_events = df_events.merge(df_opens, on=['adv_id','id_routers','dwh_id'], how='left')
+            df_events = df_events.merge(df_clicks, on=['adv_id','id_routers','dwh_id'], how='left')
+
+            df_events['opener'] = df_events['opener'].fillna(0).astype(int)
+            df_events['clicker'] = df_events['clicker'].fillna(0).astype(int)
             dwh_ids = df_events["dwh_id"].dropna().unique().tolist()
             print("recup contacts")
             df_contacts = self.recupere_contacts(dwh_ids)
@@ -200,19 +210,17 @@ class reporting:
                 df_pg = pd.DataFrame(columns=["id_routers", "ca", "date_shedule"])
             
             if not df_pg.empty:
-                df_pg_grouped = df_pg.groupby("id_routers", observed=True).agg(
+                df_pg_grouped = df_pg.groupby(["id_focus","id_routers"], observed=True).agg(
                     ca=("ca", "max"),
                     date_shedule=("date_shedule", lambda x: sorted({d for sub in x if isinstance(sub, list) for d in sub}))
                 ).reset_index()
             else:
                 df_pg_grouped = pd.DataFrame(columns=["id_routers", "ca", "date_shedule"])
-
             df_events["id_routers"] = df_events["id_routers"].astype(str).fillna("O_router")
             df_pg_grouped["id_routers"] = df_pg_grouped["id_routers"].astype(str).fillna("O_router")
 
             df = df_events.merge(df_contacts, on="dwh_id", how="left")
             df = df.merge(df_pg_grouped, on="id_routers", how="left")
-            df.to_csv('df.csv',index=False,sep=';')
             bins = [0, 18, 24, 34, 44, 54, 64, 74, 200]
             labels = ['0-18', '18-24', '25-34', '35-44', '45-54', '55-64', '65-74', '75+']
             df["age_range"] = pd.cut(df["age"], bins=bins, labels=labels)
@@ -221,20 +229,19 @@ class reporting:
             df["main_isp"] = df["main_isp"].fillna("O_isp").replace("Other", "O_isp")
             df["age_civilite_isp"] = df["age_range"].astype(str) + "_" + df["gender"].astype(str) + "_" + df["main_isp"].astype(str)
             df["ca"] = df["ca"].astype(float).fillna(0.0)
-
             for col in ["zipcode", "dep"]:
                 if col not in df.columns:
                     df[col] = "Inconnu"
                 df[col] = df[col].astype(str)
 
             df["date_shedule"] = df["date_shedule"].apply(lambda x: x if isinstance(x, list) else [])
-
-            group_cols = ["database_id", "segmentId", "adv_id", "id_routers", "tag_id", "brand","client_id","ListId", "zipcode", "dep","age_range", "gender", "main_isp", "age_civilite_isp"]
-
+            group_cols = ["database_id", "segmentId", "adv_id","id_focus","id_routers", "tag_id", "brand","client_id","ListId", "zipcode", "dep","age_range", "gender", "main_isp", "age_civilite_isp"]
             df_grouped = df.groupby(group_cols, observed=True).agg(
                 sends=("sends", "sum"),
                 opens=("opens", "sum"),
+                openers=("opener","max"),
                 clicks=("clicks", "sum"),
+                clickers=("clicker","max"),
                 removals=("removals", "sum"),
                 complaints=("complaints", "sum"),
                 bounces=("bounces", "sum"),
@@ -246,25 +253,25 @@ class reporting:
 
             df_grouped = df_grouped[df_grouped['sends'] > 0].reset_index(drop=True)
             df_grouped['updated_at'] = datetime.now()
+            with open(journal, "a") as f:
+                f.write(f"{adv_id}\n")
+                process_adv.add(adv_id)
+                df_final_all.append(df_grouped)
+                
             print(f"Insertion de l'advertiser: {adv_id}")
             if not df_grouped.empty:
                 batch_size = 5000
                 for i in range(0, len(df_grouped), batch_size):
                     chunk = df_grouped[i:i+batch_size]
                     self.clk.insert_df(self.table, chunk)
-                
-                with open(journal, "a") as f:
-                    f.write(f"{adv_id}\n")
-                process_adv.add(adv_id)
-                df_final_all.append(df_grouped)
-                time.sleep(3)
             else:
                 continue
+            time.sleep(3)
         if df_final_all:
             return pd.concat(df_final_all, ignore_index=True)
         return pd.DataFrame()
 
-    def run(self, max_retry=3, sleep_sec=5):
+    def run(self, max_retry=5, sleep_sec=5):
         last_exception = None
         for attempt in range(1, max_retry + 1):
             try:

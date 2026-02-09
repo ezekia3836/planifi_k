@@ -23,7 +23,7 @@ origins = [
 async def lifespan(app: FastAPI):
     FastAPICache.init(InMemoryBackend())
     yield
-app = FastAPI(title="PlanifiK FastAPI",lifespan=lifespan)
+app = FastAPI(title="PlanifiK",lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins, 
@@ -32,14 +32,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(database_router.router, prefix="/database", tags=["Database"])
+#app.include_router(database_router.router, prefix="/database", tags=["Database"])
 app.include_router(reporting_router)
 app.include_router(router_global)
 
 
-@app.get("/")
+"""@app.get("/")
 def read_root():
-    return {"message": "Bienvenue sur Planifik"}
+    return {"message": "Bienvenue sur Planifik"}"""
 
 def job_cron():
     start = datetime.now()
@@ -48,9 +48,8 @@ def job_cron():
     #cron.start_cont()
     #cron.start_act()
     #cron.start_tags()
-    #cron.start_reporting()
+    cron.start_reporting()
     print(f"[{datetime.now()}] Exécution du cron  {datetime.now() - start}")
-    # Ici tu peux mettre ton code, par ex. appeler la Database class
 
 # # Scheduler
 #cheduler = BackgroundScheduler()
