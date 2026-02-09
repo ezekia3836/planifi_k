@@ -130,3 +130,9 @@ class ListAdvertisersResponse(BaseModel):
     total:int
     advertisers:List[ListAdvertisers]
 
+class ListAdvertiserReporting(BaseModel):
+    adv_id:int
+
+class ListAdvertiserReportingResponse(BaseModel):
+    total:int
+    adv_id:List[ListAdvertiserReporting]

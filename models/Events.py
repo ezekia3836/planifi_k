@@ -35,7 +35,7 @@ class Events:
     
     def get_adv_ids(self):
         try:
-            query=f""" select distinct adv_id from planifik.events WHERE adv_id NOT IN (SELECT DISTINCT adv_id from planifik.reporting ) AND event_type='Sends' ORDER BY adv_id ASC
+            query=f""" select distinct adv_id from planifik.events WHERE adv_id!=0 AND adv_id NOT IN (SELECT DISTINCT adv_id from planifik.reporting ) AND event_type='Sends' ORDER BY adv_id ASC
                 """
             result = self.client.query(query)
             return [row[0] for row in result.result_rows]

@@ -1,18 +1,19 @@
 from models.query import Query
-from fastapi import APIRouter
+from fastapi import APIRouter,Depends
 from typing import Optional
 from fastapi_cache.decorator import cache 
+from reporting.security import verify_internal_token
 from reporting.schema import (
     GlobalAdvertiserResponse,
     GlobalBaseResponse,
     CountFilterResponse,
-    ListAdvertisersResponse,
-    ListTagsResponse
+    ListAdvertiserReportingResponse
 )
 query = Query()
 router = APIRouter(
     prefix="/reporting", 
-    tags=["Reporting"],   
+    tags=["Reporting"], 
+    dependencies=[Depends(verify_internal_token)]
 )
 
 @router.get("/adv/{adv}", summary="Rapport d'un advertiser",response_model=GlobalAdvertiserResponse)
@@ -29,23 +30,12 @@ async def get_report_db(db_id: int):
 @cache(expire=60)
 async def programme(adv: int):
     return query.programmes(adv)
-
-@router.get("/list_advertiser/", summary="Liste des advertisers",response_model=ListAdvertisersResponse)
-@cache(expire=60)
-async def list_advertiser():
-    return query.list_advertiser()
-
-@router.get("/list_tags/", summary="Liste des tags",response_model=ListTagsResponse)
-@cache(expire=60)
-async def list_tags():
-    return query.list_tags()
-
 @router.get("/top/", summary="Top 10 objets")
 @cache(expire=60)
 async def top_10_object():
     return query.top_10_objet()
 
-@router.get("/{adv_id}/counts", summary="Comptage par filtre", response_model=CountFilterResponse)
+@router.get("/{adv_id}/counts", summary="Comptage par filtre(age,genre,isp)", response_model=CountFilterResponse)
 def get_advertiser_counts(adv_id: int, gender: Optional[str] = None, min_age: Optional[int] = None, max_age: Optional[int] = None, isp: Optional[str] = None):
     data = query.advertiser_counts(adv_id)
 
@@ -72,3 +62,6 @@ def get_advertiser_counts(adv_id: int, gender: Optional[str] = None, min_age: Op
             "total": total_global
         }
     }
+@router.get("/advertisers/",summary="Liste des advertisers reporting",response_model=ListAdvertiserReportingResponse)
+async def get_list_adv_ids():
+    return query.liste_adv_id_reporting()

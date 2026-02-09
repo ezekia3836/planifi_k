@@ -617,7 +617,6 @@ class Query:
             return {"top_10": []}
         
 
-
     def advertiser_counts(self, adv_id: int):
         query = f"""
             SELECT gender, age_range, main_isp, SUM(sends) AS total
@@ -683,3 +682,15 @@ class Query:
             }
         result["filter"] = filter_counts
         return result
+    def liste_adv_id_reporting(self):
+        try:
+            query = f"""
+                SELECT distinct adv_id FROM reporting ORDER BY adv_id
+            """
+            rows = self._execute_query(query)
+            return {
+                "total":len(rows),
+                "adv_id":rows
+            }
+        except Exception as e:
+            print("liste adv_id reporting",e)

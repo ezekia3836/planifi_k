@@ -183,6 +183,7 @@ class reporting:
             print(f"Traitement advertiser {adv_id}")
             print("recup events")
             df_events = self.recupere_events([adv_id])
+            df_events.to_csv('events_50.csv',index=False,sep=';')
             if df_events.empty:
                 print(f"Aucun événement pour advertiser {adv_id}")
                 continue
@@ -211,7 +212,7 @@ class reporting:
 
             df = df_events.merge(df_contacts, on="dwh_id", how="left")
             df = df.merge(df_pg_grouped, on="id_routers", how="left")
-
+            df.to_csv('df.csv',index=False,sep=';')
             bins = [0, 18, 24, 34, 44, 54, 64, 74, 200]
             labels = ['0-18', '18-24', '25-34', '35-44', '45-54', '55-64', '65-74', '75+']
             df["age_range"] = pd.cut(df["age"], bins=bins, labels=labels)
@@ -245,19 +246,20 @@ class reporting:
 
             df_grouped = df_grouped[df_grouped['sends'] > 0].reset_index(drop=True)
             df_grouped['updated_at'] = datetime.now()
-
             print(f"Insertion de l'advertiser: {adv_id}")
-            #df_grouped.to_csv('grouped.csv',index=False,sep=';')
-            batch_size = 5000
-            for i in range(0, len(df_grouped), batch_size):
-                chunk = df_grouped[i:i+batch_size]
-                self.clk.insert_df(self.table, chunk)
-            
-            with open(journal, "a") as f:
-                f.write(f"{adv_id}\n")
-            process_adv.add(adv_id)
-            df_final_all.append(df_grouped)
-            time.sleep(3)
+            if not df_grouped.empty:
+                batch_size = 5000
+                for i in range(0, len(df_grouped), batch_size):
+                    chunk = df_grouped[i:i+batch_size]
+                    self.clk.insert_df(self.table, chunk)
+                
+                with open(journal, "a") as f:
+                    f.write(f"{adv_id}\n")
+                process_adv.add(adv_id)
+                df_final_all.append(df_grouped)
+                time.sleep(3)
+            else:
+                continue
         if df_final_all:
             return pd.concat(df_final_all, ignore_index=True)
         return pd.DataFrame()
