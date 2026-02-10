@@ -46,13 +46,13 @@ class BaseItem(BaseModel):
     taux_openers: float
     taux_unsubs: float
     taux_cto: float
+    analyses: Analyses
     ca: float
     ecpm: float
     date_shedule: List[date]
     SegmentId: int
     subject: str
     dimensions: Dimensions
-    analyses: Analyses
     rang: int
 
 class GlobalAdvertiserStats(BaseModel):
@@ -97,7 +97,6 @@ class AdvertiserItem(BaseModel):
     client_id:int
     id_focus:int
     tag:int
-    brand:str
     sends:int
     clicks:int
     clickers:int
@@ -150,7 +149,8 @@ class ListAdvertisersResponse(BaseModel):
 
 class ListAdvertiserReporting(BaseModel):
     adv_id:int
+    name:str
 
 class ListAdvertiserReportingResponse(BaseModel):
     total:int
-    adv_id:List[ListAdvertiserReporting]
+    advertisers:List[ListAdvertiserReporting]

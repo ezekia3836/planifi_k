@@ -250,7 +250,6 @@ class reporting:
                 date_event=("date_event", "first"),
                 date_shedule=("date_shedule", lambda x: sorted({d for sub in x if isinstance(sub, list) for d in sub}))
             ).reset_index()
-
             df_grouped = df_grouped[df_grouped['sends'] > 0].reset_index(drop=True)
             df_grouped['updated_at'] = datetime.now()
             with open(journal, "a") as f:

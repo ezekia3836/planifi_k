@@ -743,12 +743,13 @@ class Query:
     def liste_adv_id_reporting(self):
         try:
             query = f"""
-                SELECT distinct adv_id FROM reporting ORDER BY adv_id
+                SELECT distinct r.adv_id,a.name FROM reporting r JOIN advertiser a ON toUInt64(r.adv_id)=toUInt64(a.id) ORDER BY r.adv_id
             """
             rows = self._execute_query(query)
+            advertisers = [{"adv_id":r['adv_id'],"name":r["name"]} for r in rows]
             return {
                 "total":len(rows),
-                "adv_id":rows
+                "advertisers":advertisers
             }
         except Exception as e:
             print("liste adv_id reporting",e)
