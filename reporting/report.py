@@ -6,6 +6,8 @@ import time
 import os
 from sqlalchemy import text
 from models.Events import Events
+import requests
+import json
 class reporting:
 
     def __init__(self):
@@ -16,21 +18,75 @@ class reporting:
         self.date_start = self.date_end - timedelta(days=90)
         self.batch_adv_size = 50
         self.adv_ids =Events().get_adv_ids()
+    def recupere_ktk_id(self, databases_ids):
+        print("Récupère ktk_id")
+        if not databases_ids:
+            return pd.DataFrame(columns=['database_id', 'ktk_id'])
 
+        try:
+            
+            ids = ",".join(str(x) for x in databases_ids)
+            query = f"""SELECT id AS database_id, ktk_id FROM databases WHERE id IN ({ids})"""
+            
+            r = self.clk.query(query)
+            
+            if not r.result_rows:
+                return pd.DataFrame(columns=['database_id', 'ktk_id'])
+            
+            df = pd.DataFrame(r.result_rows, columns=r.column_names)
+            return df
+
+        except Exception as e:
+            print("Erreur lors de la récupération ktk_id :", e)
+            
+            return pd.DataFrame(columns=['database_id', 'ktk_id'])
+
+
+    def recuper_optimize(self, df_unique, batch_size=10):
+        
+        print("Récupération optimized")
+        endpoint = "https://konticreav2.kontikimedia.fr:5009/api/creativities/filter-plannifik"
+        df_unique = df_unique.copy()
+        for col in ["id_focus", "ktk_id", "id_routers"]:
+            df_unique[col] = df_unique[col].astype(str).str.strip()
+
+        optimized_list = []
+        for i in range(0, len(df_unique), batch_size):
+            batch = df_unique.iloc[i:i+batch_size]
+
+            for _, row in batch.iterrows():
+                params = {
+                    "focus_id": row["id_focus"],
+                    "base_id": row["ktk_id"],
+                    "router_id": row["id_routers"]
+                }
+                try:
+                    resp = requests.post(endpoint, params=params, timeout=30)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if "data" in data and data["data"]:
+                            optimized_list.append(data["data"][0].get("optimized", "O_opt"))
+                        else:
+                            optimized_list.append("O_opt")
+                    else:
+                        print(f"Erreur API {resp.status_code}: {resp.text}")
+                        optimized_list.append("O_opt")
+                except Exception as e:
+                    print(f"Erreur récupération optimize pour {row['id_focus']}, {row['ktk_id']}, {row['id_routers']}: {e}")
+                    optimized_list.append("O_opt")
+
+        df_unique["optimized"] = optimized_list
+        return df_unique
     def clean_adv_ids(self, adv_ids):
         return list(set([str(x).strip() for x in adv_ids if str(x).strip().isdigit()]))
-
-    
     def recupere_events(self, adv_ids):
         adv_ids_clean = self.clean_adv_ids(adv_ids)
         if not adv_ids_clean:
             return pd.DataFrame()
-
         df_all = []
         for i in range(0, len(adv_ids_clean), self.batch_adv_size):
             batch = adv_ids_clean[i:i+self.batch_adv_size]
             batch_str = ",".join(f"{x}" for x in batch)
-
             query = f"""
               SELECT
                     database_id,
@@ -169,7 +225,7 @@ class reporting:
             print("Erreur Postgres:", e)
             return pd.DataFrame(columns=["id_focus","id_routers","ca","date_shedule"])
 
-    def report(self,journal="journal.txt"):
+    def report(self,journal="journal.txt",batch_optimize=10):
         df_final_all = []
         if os.path.exists(journal):
             with open(journal,'r') as f:
@@ -233,9 +289,20 @@ class reporting:
                 if col not in df.columns:
                     df[col] = "Inconnu"
                 df[col] = df[col].astype(str)
-
+            database_ids = df["database_id"].dropna().unique().tolist()
+            df_db = self.recupere_ktk_id(database_ids)
+           
+            df = df.merge(df_db, on="database_id", how="left")
+            df["ktk_id"] = df["ktk_id"].fillna("O_ktk")
+            for col in ["id_focus","id_routers","ktk_id"]:
+                df[col] = df[col].astype(str)
+            df_unique = df[['id_routers', 'id_focus', 'ktk_id']].drop_duplicates()
+            df_unique = self.recuper_optimize(df_unique, batch_size=batch_optimize)
+            df = df.merge(df_unique[['id_routers', 'id_focus', 'ktk_id', 'optimized']],
+                        on=['id_routers', 'id_focus', 'ktk_id'], how='left')
+            df["optimized"] = df["optimized"].fillna("O_opt")
             df["date_shedule"] = df["date_shedule"].apply(lambda x: x if isinstance(x, list) else [])
-            group_cols = ["database_id", "segmentId", "adv_id","id_focus","id_routers", "tag_id", "brand","client_id","ListId", "zipcode", "dep","age_range", "gender", "main_isp", "age_civilite_isp"]
+            group_cols = ["database_id","ktk_id","segmentId", "adv_id","id_focus","id_routers", "tag_id", "brand","client_id","ListId", "zipcode", "dep","age_range", "gender", "main_isp", "age_civilite_isp"]
             df_grouped = df.groupby(group_cols, observed=True).agg(
                 sends=("sends", "sum"),
                 opens=("opens", "sum"),
@@ -247,6 +314,7 @@ class reporting:
                 bounces=("bounces", "sum"),
                 ca=("ca", "max"),
                 subject=("subject", "first"),
+                optimized=("optimized","first"),
                 date_event=("date_event", "first"),
                 date_shedule=("date_shedule", lambda x: sorted({d for sub in x if isinstance(sub, list) for d in sub}))
             ).reset_index()
@@ -258,7 +326,9 @@ class reporting:
                 df_final_all.append(df_grouped)
                 
             print(f"Insertion de l'advertiser: {adv_id}")
+            
             if not df_grouped.empty:
+                df_grouped.to_csv('groupe.csv',index=False,sep=';')
                 batch_size = 5000
                 for i in range(0, len(df_grouped), batch_size):
                     chunk = df_grouped[i:i+batch_size]

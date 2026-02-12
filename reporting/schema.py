@@ -15,9 +15,12 @@ class Stats(BaseModel):
     openers: int
     unsubs: int
     complaints: int
+    bounces:int
     taux_clickers: float
     taux_cto: float
     taux_unsubs: float
+    taux_complaints:float=0.0
+    taux_bounces:float=0.0
 
 class DimensionStats(Stats):
     analyses: Analyses
@@ -28,11 +31,28 @@ class Dimensions(BaseModel):
     isp:Optional[Dict[str,Any]]=None
     age_civilite_isp:Optional[Dict[str,Any]]=None
 
+class BrandItem(BaseModel):
+    name:str
+    creativities:str
+    sends: int=0
+    clicks:int=0
+    clickers: int=0
+    opens:int=0
+    openers: int=0
+    unsubs: int=0
+    complaints: int=0
+    bounces:int=0
+    taux_clickers: float=0.0
+    taux_cto: float=0.0
+    taux_unsubs: float=0.0
+    taux_complaints:float=0.0
+    taux_bounces:float=0.0
+
 class BaseItem(BaseModel):
     database_id: int
     id_routers: str
     tag_id: int
-    brand: str
+    brands: List[BrandItem]
     id_focus:int
     client_id:int
     sends: int
@@ -42,18 +62,22 @@ class BaseItem(BaseModel):
     openers: int
     unsubs: int
     complaints: int
-    taux_clickers: float
-    taux_openers: float
-    taux_unsubs: float
-    taux_cto: float
-    analyses: Analyses
-    ca: float
-    ecpm: float
+    bounces:int
+    taux_clickers: float=0.0
+    taux_openers: float=0.0
+    taux_unsubs: float=0.0
+    taux_cto: float=0.0
+    taux_complaints:float=0.0
+    taux_bounces:float=0.0
+    ca: float=0.0
+    ecpm: float=0.0
+    rang: int=0
     date_shedule: List[date]
     SegmentId: int
     subject: str
+    analyses: Analyses
     dimensions: Dimensions
-    rang: int
+   
 
 class GlobalAdvertiserStats(BaseModel):
     sends: int=0
@@ -63,12 +87,15 @@ class GlobalAdvertiserStats(BaseModel):
     openers: int=0
     unsubs: int=0
     complaints: int=0
+    bounces:int=0
     ecpm: float=0.0
     ca: float=0.0
     taux_clickers: float=0.0
     taux_openers: float=0.0
     taux_unsubs: float=0.0
     taux_cto: float=0.0
+    taux_complaints:float=0.0
+    taux_bounces:float=0.0
     analyses:Analyses={}
 
 class GlobalAdvertiserResponse(BaseModel):
@@ -77,46 +104,54 @@ class GlobalAdvertiserResponse(BaseModel):
     bases:List[BaseItem]
 
 class GobalBaseStats(BaseModel):
-    sends_total:int=0
-    clicks_total:int=0
-    clickers_total:int=0
-    opens_total:int=0
-    openers_total:int=0
-    removals_total:int=0
-    ca_total:int=0
+    sends:int=0
+    clicks:int=0
+    clickers:int=0
+    opens:int=0
+    openers:int=0
+    removals:int=0
+    bounces:int=0
+    complaints:int=0
+    ca:int=0
     ecpm:float=0.0
     taux_clickers:float=0.0
     taux_openers:float=0.0
     taux_unsubs:float=0.0
     taux_cto:float=0.0
     taux_unsubs:float=0.0
+    taux_complaints:float=0.0
+    taux_bounces:float=0.0
     analyses:Analyses={}
 
 class AdvertiserItem(BaseModel):
     advertiser_id:str
-    client_id:int
-    id_focus:int
-    tag:int
-    sends:int
-    clicks:int
-    clickers:int
-    opens:int
-    openers:int
-    removals:int
-    ca:int
-    ecpm:float
-    taux_clickers:float
-    taux_openers:float
-    taux_unsubs:float
-    taux_cto:float
+    client_id:int=0
+    id_focus:int=0
+    brands: List[BrandItem]
+    tag:int=0
+    sends:int=0
+    clicks:int=0
+    clickers:int=0
+    opens:int=0
+    openers:int=0
+    unsubs:int=0
+    complaints:int=0
+    bounces:int=0
+    ca:int=0
+    ecpm:float=0.0
+    taux_clickers:float=0.0
+    taux_openers:float=0.0
+    taux_unsubs:float=0.0
+    taux_cto:float=0.0
+    taux_complaints:float=0.0
+    taux_bounces:float=0.0
     classe:str
-    analyses:Analyses
-    dimensions:Dimensions
+    analyses:Analyses={}
+    dimensions:Dimensions={}
     
-
 class GlobalBaseResponse(BaseModel):
     database_id:str
-    globale_base:GobalBaseStats
+    globales:GobalBaseStats
     advertisers:List[AdvertiserItem]
 
 class CountFilter(BaseModel):
@@ -154,3 +189,7 @@ class ListAdvertiserReporting(BaseModel):
 class ListAdvertiserReportingResponse(BaseModel):
     total:int
     advertisers:List[ListAdvertiserReporting]
+
+class ListTagsReporting(BaseModel):
+    tag_id:int
+    tag:str

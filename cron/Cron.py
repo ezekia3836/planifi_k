@@ -3,6 +3,8 @@ from cron.p_activity import p_activity
 from cron.p_tags import p_tags
 from cron.p_advertiser import p_advertiser
 from reporting.report import reporting
+import requests
+import pandas as pd
 
 class Cron():
 
@@ -45,3 +47,4 @@ class Cron():
             cron.run()
         except Exception as e:
             print(e)
+

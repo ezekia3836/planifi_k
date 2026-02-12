@@ -2,13 +2,13 @@ from models.query import Query
 from fastapi import APIRouter,Depends
 from typing import Optional
 from fastapi_cache.decorator import cache 
-from fastapi_cache.backends.inmemory import InMemoryBackend
 from reporting.security import verify_internal_token
 from reporting.schema import (
     GlobalAdvertiserResponse,
     GlobalBaseResponse,
     CountFilterResponse,
-    ListAdvertiserReportingResponse
+    ListAdvertiserReportingResponse,
+    ListTagsResponse
 )
 query = Query()
 router = APIRouter(
@@ -66,3 +66,7 @@ def get_advertiser_counts(adv_id: int, gender: Optional[str] = None, min_age: Op
 @router.get("/advertisers/",summary="Liste des advertisers reporting",response_model=ListAdvertiserReportingResponse)
 async def get_list_adv_ids():
     return query.liste_adv_id_reporting()
+
+@router.get("/tags/",summary="Liste des tags reporting",response_model=ListTagsResponse)
+async def get_list_tags():
+    return query.list_tags()
