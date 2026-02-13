@@ -50,6 +50,7 @@ class BrandItem(BaseModel):
 
 class BaseItem(BaseModel):
     database_id: int
+    ktk_id:int
     id_routers: str
     tag_id: int
     brands: List[BrandItem]
@@ -126,6 +127,7 @@ class GobalBaseStats(BaseModel):
 class AdvertiserItem(BaseModel):
     advertiser_id:str
     client_id:int=0
+    id_routers:int=0
     id_focus:int=0
     brands: List[BrandItem]
     tag:int=0

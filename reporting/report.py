@@ -19,7 +19,6 @@ class reporting:
         self.batch_adv_size = 50
         self.adv_ids =Events().get_adv_ids()
     def recupere_ktk_id(self, databases_ids):
-        print("Récupère ktk_id")
         if not databases_ids:
             return pd.DataFrame(columns=['database_id', 'ktk_id'])
 
@@ -44,7 +43,6 @@ class reporting:
 
     def recuper_optimize(self, df_unique, batch_size=10):
         
-        print("Récupération optimized")
         endpoint = "https://konticreav2.kontikimedia.fr:5009/api/creativities/filter-plannifik"
         df_unique = df_unique.copy()
         for col in ["id_focus", "ktk_id", "id_routers"]:
@@ -55,17 +53,20 @@ class reporting:
             batch = df_unique.iloc[i:i+batch_size]
 
             for _, row in batch.iterrows():
-                params = {
-                    "focus_id": row["id_focus"],
-                    "base_id": row["ktk_id"],
-                    "router_id": row["id_routers"]
-                }
+                params = [
+                        ("focus_id", int(row["id_focus"])),
+                        ("base_id", int(row["ktk_id"])),
+                        ("router_id",int(row["id_routers"]))
+                    ]
+                
                 try:
                     resp = requests.post(endpoint, params=params, timeout=30)
                     if resp.status_code == 200:
                         data = resp.json()
-                        if "data" in data and data["data"]:
-                            optimized_list.append(data["data"][0].get("optimized", "O_opt"))
+                        if data.get("data"):
+                            opt_value = next(
+                                (item.get("optimized") for item in data["data"] if item.get("optimized")),"O_opt")
+                            optimized_list.append(opt_value)
                         else:
                             optimized_list.append("O_opt")
                     else:
@@ -88,24 +89,35 @@ class reporting:
             batch = adv_ids_clean[i:i+self.batch_adv_size]
             batch_str = ",".join(f"{x}" for x in batch)
             query = f"""
-              SELECT
-                    database_id,
-                    MessageId      AS id_routers,
-                    adv_id,
-                    dwh_id,
-                    SegmentId      AS segmentId,
-                    MessageSubject AS subject,
+                       SELECT
+                e.database_id,
+                e.MessageId      AS id_routers,
+                e.adv_id,
+                e.dwh_id,
+                e.SegmentId      AS segmentId,
+                e.MessageSubject AS subject,
+                e.event_type,
+                e.Date           AS date_event,
+                e.tag            AS tag_id,
+                e.brand,
+                e.client_id,
+                e.ListId
+            FROM events_2 e
+            INNER JOIN (
+                SELECT
+                    MessageId,
                     event_type,
-                    Date           AS date_event,
-                    tag            AS tag_id,
-                    brand,
-                    client_id,
-                    ListId
+                    max(run_id) AS max_run_id
                 FROM events_2
                 WHERE adv_id IN ({batch_str})
                 AND Date BETWEEN '{self.date_start}' AND '{self.date_end}'
-                QUALIFY
-                    run_id = max(run_id) OVER (PARTITION BY MessageId, event_type)
+                GROUP BY MessageId, event_type
+            ) m
+            ON e.MessageId = m.MessageId
+            AND e.event_type = m.event_type
+            AND e.run_id = m.max_run_id
+            WHERE e.adv_id IN ({batch_str})
+            AND e.Date BETWEEN '{self.date_start}' AND '{self.date_end}'
             """
             try:
                 r = self.clk.query(query)
@@ -236,13 +248,11 @@ class reporting:
         for adv_id in self.adv_ids:
             if adv_id in process_adv:
                 continue
-            print(f"Traitement advertiser {adv_id}")
-            print("recup events")
+            print(f"Traitement advertiser {adv_id} ........")
             df_events = self.recupere_events([adv_id])
             if df_events.empty:
                 print(f"Aucun événement pour advertiser {adv_id}")
                 continue
-
             event_types = ["Sends", "Opens", "Clicks", "Removals", "Complaints", "Bounces"]
             for ev in event_types:
                 df_events[ev.lower()] = (df_events["event_type"] == ev).astype(int)
@@ -258,9 +268,7 @@ class reporting:
             df_events['opener'] = df_events['opener'].fillna(0).astype(int)
             df_events['clicker'] = df_events['clicker'].fillna(0).astype(int)
             dwh_ids = df_events["dwh_id"].dropna().unique().tolist()
-            print("recup contacts")
             df_contacts = self.recupere_contacts(dwh_ids)
-            print("recup focus")
             df_pg = self.recupere_pg([adv_id])
             if df_pg.empty:
                 df_pg = pd.DataFrame(columns=["id_routers", "ca", "date_shedule"])
@@ -324,17 +332,17 @@ class reporting:
                 f.write(f"{adv_id}\n")
                 process_adv.add(adv_id)
                 df_final_all.append(df_grouped)
-                
-            print(f"Insertion de l'advertiser: {adv_id}")
+            print(f"Insertion de l'advertiser .....")
             
             if not df_grouped.empty:
-                df_grouped.to_csv('groupe.csv',index=False,sep=';')
+                #df_grouped.to_csv('groupe.csv',index=False,sep=';')
                 batch_size = 5000
                 for i in range(0, len(df_grouped), batch_size):
                     chunk = df_grouped[i:i+batch_size]
                     self.clk.insert_df(self.table, chunk)
             else:
                 continue
+            print("Insertion terminée")
             time.sleep(3)
         if df_final_all:
             return pd.concat(df_final_all, ignore_index=True)

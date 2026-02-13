@@ -71,7 +71,8 @@ class Query:
                 segmentId,
                 subject,
                 client_id,
-                id_focus
+                id_focus,
+                ktk_id
             FROM reporting
             WHERE adv_id = {adv_id}
             GROUP BY
@@ -88,7 +89,8 @@ class Query:
                 segmentId,
                 subject,
                 client_id,
-                id_focus
+                id_focus,
+                ktk_id
         """
         rows = self._execute_query(query)
         if not rows:
@@ -100,9 +102,10 @@ class Query:
         total_unsubs_global = total_complaints_global = total_bounces_global = 0
 
         for r in rows:
-            base_key = (r["database_id"], r["id_routers"], r['tag_id'], r['segmentId'], r['client_id'], r['id_focus'])
+            base_key = (r["database_id"], r["ktk_id"], r["id_routers"], r['tag_id'], r['segmentId'], r['client_id'], r['id_focus'])
             base = bases.setdefault(base_key, {
                 "database_id": r["database_id"],
+                "ktk_id":r["ktk_id"],
                 "id_routers": r["id_routers"],
                 "tag_id": r['tag_id'],
                 "client_id": r['client_id'],
@@ -292,6 +295,7 @@ class Query:
 
             result["bases"].append({
                 "database_id": base["database_id"],
+                "ktk_id":base["ktk_id"],
                 "id_routers": base["id_routers"],
                 "tag_id": base['tag_id'],
                 "client_id": base['client_id'],
@@ -419,6 +423,7 @@ class Query:
             adv = advertisers.setdefault(adv_id, {
                 "advertiser_id": adv_id,
                 "routers_seen": set(),
+                "id_routers":r["id_routers"],
                 "client_id": r['client_id'],
                 "id_focus": r['id_focus'],
                 "tag": r['tag_id'],

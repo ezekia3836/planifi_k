@@ -1,4 +1,4 @@
-fetch("https://konticreav2.kontikimedia.fr:5009/api/creativities/filter-plannifik?focus_id=378090&base_id=132", {
+fetch("https://konticreav2.kontikimedia.fr:5009/api/creativities/filter-plannifik?focus_id=384141&base_id=62", {
   method: "POST"
 })
 .then(res => res.json())
