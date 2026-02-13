@@ -42,50 +42,39 @@ class reporting:
 
 
     def recuper_optimize(self, df_unique, batch_size=10):
+        
         endpoint = "https://konticreav2.kontikimedia.fr:5009/api/creativities/filter-plannifik"
         df_unique = df_unique.copy()
-
         for col in ["id_focus", "ktk_id", "id_routers"]:
             df_unique[col] = df_unique[col].astype(str).str.strip()
 
         optimized_list = []
-
         for i in range(0, len(df_unique), batch_size):
             batch = df_unique.iloc[i:i+batch_size]
 
             for _, row in batch.iterrows():
                 params = [
-                    ("focus_id", int(row["id_focus"])),
-                    ("base_id", int(row["ktk_id"])),
-                    ("router_id", int(row["id_routers"]))
-                ]
-
+                        ("focus_id", int(row["id_focus"])),
+                        ("base_id", int(row["ktk_id"])),
+                        ("router_id",int(row["id_routers"]))
+                    ]
+                
                 try:
                     resp = requests.post(endpoint, params=params, timeout=30)
-
                     if resp.status_code == 200:
                         data = resp.json()
-                        opt_value = ""
-
                         if data.get("data"):
-                            for item in data["data"]:
-                                if (
-                                    str(item.get("focus_id")) == row["id_focus"]
-                                    and str(item.get("base_id")) == row["ktk_id"]
-                                    and str(item.get("router_id")) == row["id_routers"]
-                                ):
-                                    opt_value = item.get("optimized") or ""
-                                    break
-
-                        optimized_list.append(opt_value)
-
+                            opt_value = next(
+                                (item.get("optimized") for item in data["data"] if item.get("optimized")),"url_vide")
+                            optimized_list.append(opt_value)
+                        else:
+                            optimized_list.append("url_vide")
                     else:
                         print(f"Erreur API {resp.status_code}: {resp.text}")
-                        optimized_list.append("")
-
+                        optimized_list.append("url_vide")
                 except Exception as e:
                     print(f"Erreur récupération optimize pour {row['id_focus']}, {row['ktk_id']}, {row['id_routers']}: {e}")
-                    optimized_list.append("")
+                    optimized_list.append("url_vide")
 
         df_unique["optimized"] = optimized_list
         return df_unique
@@ -312,14 +301,14 @@ class reporting:
             df_db = self.recupere_ktk_id(database_ids)
            
             df = df.merge(df_db, on="database_id", how="left")
-            df["ktk_id"] = df["ktk_id"].fillna("")
+            df["ktk_id"] = df["ktk_id"].fillna("ktk_vide")
             for col in ["id_focus","id_routers","ktk_id"]:
                 df[col] = df[col].astype(str)
             df_unique = df[['id_routers', 'id_focus', 'ktk_id']].drop_duplicates()
             df_unique = self.recuper_optimize(df_unique, batch_size=batch_optimize)
             df = df.merge(df_unique[['id_routers', 'id_focus', 'ktk_id', 'optimized']],
                         on=['id_routers', 'id_focus', 'ktk_id'], how='left')
-            df["optimized"] = df["optimized"].fillna("")
+            df["optimized"] = df["optimized"].fillna("url_vide")
             df["date_shedule"] = df["date_shedule"].apply(lambda x: x if isinstance(x, list) else [])
             group_cols = ["database_id","ktk_id","segmentId", "adv_id","id_focus","id_routers", "tag_id", "brand","client_id","ListId", "zipcode", "dep","age_range", "gender", "main_isp", "age_civilite_isp"]
             df_grouped = df.groupby(group_cols, observed=True).agg(
@@ -346,11 +335,11 @@ class reporting:
             print(f"Insertion de l'advertiser .....")
             
             if not df_grouped.empty:
-                df_grouped.to_csv('groupe.csv',index=False,sep=';')
-                """batch_size = 5000
+                #df_grouped.to_csv('groupe.csv',index=False,sep=';')
+                batch_size = 5000
                 for i in range(0, len(df_grouped), batch_size):
                     chunk = df_grouped[i:i+batch_size]
-                    self.clk.insert_df(self.table, chunk)"""
+                    self.clk.insert_df(self.table, chunk)
             else:
                 continue
             print("Insertion terminée")
