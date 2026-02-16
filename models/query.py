@@ -72,11 +72,13 @@ class Query:
                 subject,
                 client_id,
                 id_focus,
-                ktk_id
+                ktk_id,
+                basename
             FROM reporting
             WHERE adv_id = {adv_id}
             GROUP BY
                 database_id,
+                basename,
                 id_routers,
                 age_range,
                 gender,
@@ -102,9 +104,10 @@ class Query:
         total_unsubs_global = total_complaints_global = total_bounces_global = 0
 
         for r in rows:
-            base_key = (r["database_id"], r["ktk_id"], r["id_routers"], r['tag_id'], r['segmentId'], r['client_id'], r['id_focus'])
+            base_key = (r["database_id"], r["ktk_id"], r["id_routers"], r['tag_id'], r['segmentId'], r['client_id'], r['id_focus'],r['basename'])
             base = bases.setdefault(base_key, {
                 "database_id": r["database_id"],
+                "basename":r['basename'],
                 "ktk_id":r["ktk_id"],
                 "id_routers": r["id_routers"],
                 "tag_id": r['tag_id'],
@@ -295,6 +298,7 @@ class Query:
 
             result["bases"].append({
                 "database_id": base["database_id"],
+                "basename":base['basename'],
                 "ktk_id":base["ktk_id"],
                 "id_routers": base["id_routers"],
                 "tag_id": base['tag_id'],
@@ -356,7 +360,8 @@ class Query:
                 max(ca)        AS ca,
                 client_id,
                 id_focus,
-                tag_id
+                tag_id,
+                basename
             FROM reporting
             WHERE database_id = {db_id}
             GROUP BY
@@ -370,10 +375,14 @@ class Query:
                 optimized,
                 client_id,
                 id_focus,
-                tag_id
+                tag_id,
+                basename
         """
         rows = self._execute_query(query)
-
+        base_name_value=None
+        for r in rows:
+            if base_name_value is None:
+                base_name_value=r['basename']
         result = {
             "database_id": str(db_id),
             "globales": {
@@ -558,7 +567,7 @@ class Query:
             "taux_cto": self.analyze.analyze_cto_rate(g["taux_cto"], openers),
             "taux_unsubs": self.analyze.analyze_unsub_rate(g["taux_unsubs"])
         }
-
+        result['basename']=base_name_value
         return result
 
     def calendrier(self, adv_id):

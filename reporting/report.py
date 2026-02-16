@@ -17,7 +17,7 @@ class reporting:
         self.date_end = pd.to_datetime("today").date()
         self.date_start = self.date_end - timedelta(days=90)
         self.batch_adv_size = 50
-        self.adv_ids =Events().get_adv_ids()
+        self.adv_ids =[54] #Events().get_adv_ids()
     def recupere_ktk_id(self, databases_ids):
         if not databases_ids:
             return pd.DataFrame(columns=['database_id', 'ktk_id'])
@@ -25,12 +25,12 @@ class reporting:
         try:
             
             ids = ",".join(str(x) for x in databases_ids)
-            query = f"""SELECT id AS database_id, ktk_id FROM databases WHERE id IN ({ids})"""
+            query = f"""SELECT id AS database_id, ktk_id,basename FROM databases WHERE id IN ({ids})"""
             
             r = self.clk.query(query)
             
             if not r.result_rows:
-                return pd.DataFrame(columns=['database_id', 'ktk_id'])
+                return pd.DataFrame(columns=['database_id', 'ktk_id','basename'])
             
             df = pd.DataFrame(r.result_rows, columns=r.column_names)
             return df
@@ -38,7 +38,7 @@ class reporting:
         except Exception as e:
             print("Erreur lors de la récupération ktk_id :", e)
             
-            return pd.DataFrame(columns=['database_id', 'ktk_id'])
+            return pd.DataFrame(columns=['database_id', 'ktk_id','basename'])
 
 
     def recuper_optimize(self, df_unique, batch_size=10):
@@ -302,6 +302,7 @@ class reporting:
            
             df = df.merge(df_db, on="database_id", how="left")
             df["ktk_id"] = df["ktk_id"].fillna("ktk_vide")
+            df['basename']=df['basename'].fillna("base_vide")
             for col in ["id_focus","id_routers","ktk_id"]:
                 df[col] = df[col].astype(str)
             df_unique = df[['id_routers', 'id_focus', 'ktk_id']].drop_duplicates()
@@ -310,7 +311,7 @@ class reporting:
                         on=['id_routers', 'id_focus', 'ktk_id'], how='left')
             df["optimized"] = df["optimized"].fillna("url_vide")
             df["date_shedule"] = df["date_shedule"].apply(lambda x: x if isinstance(x, list) else [])
-            group_cols = ["database_id","ktk_id","segmentId", "adv_id","id_focus","id_routers", "tag_id", "brand","client_id","ListId", "zipcode", "dep","age_range", "gender", "main_isp", "age_civilite_isp"]
+            group_cols = ["database_id","basename","ktk_id","segmentId", "adv_id","id_focus","id_routers", "tag_id", "brand","client_id","ListId", "zipcode", "dep","age_range", "gender", "main_isp", "age_civilite_isp"]
             df_grouped = df.groupby(group_cols, observed=True).agg(
                 sends=("sends", "sum"),
                 opens=("opens", "sum"),

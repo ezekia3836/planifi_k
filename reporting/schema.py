@@ -50,6 +50,7 @@ class BrandItem(BaseModel):
 
 class BaseItem(BaseModel):
     database_id: int
+    basename:str
     ktk_id:int
     id_routers: str
     tag_id: int
@@ -153,6 +154,7 @@ class AdvertiserItem(BaseModel):
     
 class GlobalBaseResponse(BaseModel):
     database_id:str
+    basename:str
     globales:GobalBaseStats
     advertisers:List[AdvertiserItem]
 
