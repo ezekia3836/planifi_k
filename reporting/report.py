@@ -7,6 +7,7 @@ import os
 from sqlalchemy import text
 from models.Events import Events
 import requests
+import math
 import json
 class reporting:
     def __init__(self):
@@ -17,6 +18,7 @@ class reporting:
         self.date_start = self.date_end - timedelta(days=90)
         self.batch_adv_size = 50
         self.adv_ids =Events().get_adv_ids()
+        
     def recupere_ktk_id(self, databases_ids):
         if not databases_ids:
             return pd.DataFrame(columns=['database_id', 'ktk_id'])
@@ -38,47 +40,67 @@ class reporting:
             print("Erreur lors de la récupération ktk_id :", e)
             
             return pd.DataFrame(columns=['database_id', 'ktk_id','basename'])
-
-
+    def safe(self,value):
+        try:
+            if value is None:
+                return 0
+            if pd.isna(value):
+                return 0
+            f = float(value)
+            if not math.isfinite(f):
+                return 0
+            return int(f)
+        except (ValueError,TypeError):
+            return 0
     def recuper_optimize(self, df_unique, batch_size=10):
-        
         endpoint = "https://konticreav2.kontikimedia.fr:5009/api/creativities/filter-plannifik"
         df_unique = df_unique.copy()
-        for col in ["id_focus", "ktk_id", "id_routers"]:
-            df_unique[col] = df_unique[col].astype(str).str.strip()
 
         optimized_list = []
         for i in range(0, len(df_unique), batch_size):
             batch = df_unique.iloc[i:i+batch_size]
 
-            for _, row in batch.iterrows():
-                params = [
-                        ("focus_id", int(row["id_focus"])),
-                        ("base_id", int(row["ktk_id"])),
-                        ("router_id",int(row["id_routers"]))
-                    ]
-                
+            for idx, row in batch.iterrows():
                 try:
+                    focus_id = self.safe(row["id_focus"])
+                    base_id = self.safe(row["ktk_id"])
+                    router_id = self.safe(row["id_routers"])
+
+                    if None in (focus_id, base_id, router_id):
+                        optimized_list.append("url_vide")
+                        continue
+
+                    params = [
+                        ("focus_id", focus_id),
+                        ("base_id", base_id),
+                        ("router_id", router_id),
+                    ]
+
                     resp = requests.post(endpoint, params=params, timeout=30)
+
                     if resp.status_code == 200:
                         data = resp.json()
                         if data.get("data"):
                             opt_value = next(
-                                (item.get("optimized") for item in data["data"] if item.get("optimized")),"url_vide")
+                                (item.get("optimized") for item in data["data"] if item.get("optimized")),
+                                "url_vide"
+                            )
                             optimized_list.append(opt_value)
                         else:
                             optimized_list.append("url_vide")
                     else:
-                        print(f"Erreur API {resp.status_code}: {resp.text}")
+                        print(f"[WARN] API {resp.status_code}: {resp.text}")
                         optimized_list.append("url_vide")
+
                 except Exception as e:
-                    print(f"Erreur récupération optimize pour {row['id_focus']}, {row['ktk_id']}, {row['id_routers']}: {e}")
+                    print(f"[WARN] Ligne {idx} ignorée : {e}")
                     optimized_list.append("url_vide")
 
         df_unique["optimized"] = optimized_list
         return df_unique
     def clean_adv_ids(self, adv_ids):
         return list(set([str(x).strip() for x in adv_ids if str(x).strip().isdigit()]))
+    
     def recupere_events(self, adv_ids):
         adv_ids_clean = self.clean_adv_ids(adv_ids)
         if not adv_ids_clean:
@@ -328,10 +350,14 @@ class reporting:
             ).reset_index()
             df_grouped = df_grouped[df_grouped['sends'] > 0].reset_index(drop=True)
             df_grouped['updated_at'] = datetime.now()
+            for col in ['database_id','ktk_id','segmentId','adv_id','id_focus','tag_id','client_id']:
+                df_grouped[col] = df_grouped[col].apply(self.safe)
+            #df_grouped['id_focus'] = df_grouped['id_focus'].apply(self.safe)
             with open(journal, "a") as f:
                 f.write(f"{adv_id}\n")
                 process_adv.add(adv_id)
                 df_final_all.append(df_grouped)
+
             print(f"Insertion de l'advertiser .....")
             
             if not df_grouped.empty:

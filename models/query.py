@@ -789,7 +789,7 @@ class Query:
         
     def advertiser_counts(self, adv_id: int):
         query = f"""
-            SELECT gender, age_range, main_isp, SUM(sends) AS total
+            SELECT gender, age_range, main_isp, COUNT() AS total
             FROM reporting
             WHERE adv_id = {adv_id}
             GROUP BY gender, age_range, main_isp
