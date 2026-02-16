@@ -68,7 +68,7 @@ class Query:
                 SUM(complaints) AS complaints,
                 SUM(bounces) AS bounces,
                 MAX(ca) AS ca,
-                segmentId,
+                groupUniqArray(segmentId) AS segmentId,
                 subject,
                 client_id,
                 id_focus,
@@ -88,7 +88,6 @@ class Query:
                 optimized,
                 tag_id,
                 date_shedule,
-                segmentId,
                 subject,
                 client_id,
                 id_focus,
@@ -104,7 +103,7 @@ class Query:
         total_unsubs_global = total_complaints_global = total_bounces_global = 0
 
         for r in rows:
-            base_key = (r["database_id"], r["ktk_id"], r["id_routers"], r['tag_id'], r['segmentId'], r['client_id'], r['id_focus'],r['basename'])
+            base_key = (r["database_id"], r["ktk_id"], r["id_routers"], r['tag_id'], r['client_id'], r['id_focus'],r['basename'])
             base = bases.setdefault(base_key, {
                 "database_id": r["database_id"],
                 "basename":r['basename'],
@@ -123,7 +122,7 @@ class Query:
                 "bounces": 0,
                 "ca": 0.0,
                 "date_shedule": [],
-                "SegmentId": r.get("segmentId"),
+                "SegmentIds":set(),
                 "subject": r.get("subject"),
                 "dimensions": {
                     "age_range": {},
@@ -133,6 +132,8 @@ class Query:
                 },
                 "brands": []
             })
+            if r.get("segmentId"):
+                base["SegmentIds"].update(r['segmentId'])
 
             sends = r["sends"]
             clickers = r["clickers"]
@@ -322,7 +323,7 @@ class Query:
                 "ca": ca_clean,
                 "ecpm": ecpm,
                 "date_shedule": base.get("date_shedule"),
-                "SegmentId": base.get("SegmentId"),
+                "SegmentIds": sorted(list(base["SegmentIds"])),
                 "subject": base64.b64decode(base.get("subject")).decode("utf-8") if base.get("subject") else "",
                 "dimensions": base["dimensions"],
                 "analyses": base_analyses
@@ -361,7 +362,8 @@ class Query:
                 client_id,
                 id_focus,
                 tag_id,
-                basename
+                basename,
+                ktk_id
             FROM reporting
             WHERE database_id = {db_id}
             GROUP BY
@@ -376,13 +378,16 @@ class Query:
                 client_id,
                 id_focus,
                 tag_id,
-                basename
+                basename,
+                ktk_id
         """
         rows = self._execute_query(query)
         base_name_value=None
+        ktk_value=None
         for r in rows:
-            if base_name_value is None:
+            if base_name_value is None and ktk_value is None:
                 base_name_value=r['basename']
+                ktk_value=r['ktk_id']
         result = {
             "database_id": str(db_id),
             "globales": {
@@ -568,6 +573,7 @@ class Query:
             "taux_unsubs": self.analyze.analyze_unsub_rate(g["taux_unsubs"])
         }
         result['basename']=base_name_value
+        result['ktk_id']=ktk_value
         return result
 
     def calendrier(self, adv_id):

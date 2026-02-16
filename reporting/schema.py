@@ -75,7 +75,7 @@ class BaseItem(BaseModel):
     ecpm: float=0.0
     rang: int=0
     date_shedule: List[date]
-    SegmentId: int
+    SegmentIds: List[int]
     subject: str
     analyses: Analyses
     dimensions: Dimensions
@@ -155,6 +155,7 @@ class AdvertiserItem(BaseModel):
 class GlobalBaseResponse(BaseModel):
     database_id:str
     basename:str
+    ktk_id:int
     globales:GobalBaseStats
     advertisers:List[AdvertiserItem]
 

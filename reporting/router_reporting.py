@@ -13,11 +13,11 @@ from reporting.schema import (
 query = Query()
 router = APIRouter(
     prefix="/reporting", 
-    tags=["Reporting"], 
+    tags=["Reporting"],
     dependencies=[Depends(verify_internal_token)]
 )
 
-@router.get("/adv/{adv}", summary="Rapport d'un advertiser",response_model=GlobalAdvertiserResponse)
+@router.get("/advertiser/{adv}", summary="Rapport d'un advertiser",response_model=GlobalAdvertiserResponse)
 @cache(expire=60)
 async def get_report_advertiser(adv: int):
     return query.global_advertiser(adv)

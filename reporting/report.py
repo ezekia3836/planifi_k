@@ -9,7 +9,6 @@ from models.Events import Events
 import requests
 import json
 class reporting:
-
     def __init__(self):
         self.clk = ClickHouseConfig().getClient_prod()
         self.pg = PgConfig().get_client()
@@ -17,7 +16,7 @@ class reporting:
         self.date_end = pd.to_datetime("today").date()
         self.date_start = self.date_end - timedelta(days=90)
         self.batch_adv_size = 50
-        self.adv_ids =[54] #Events().get_adv_ids()
+        self.adv_ids =Events().get_adv_ids()
     def recupere_ktk_id(self, databases_ids):
         if not databases_ids:
             return pd.DataFrame(columns=['database_id', 'ktk_id'])
