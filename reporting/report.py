@@ -20,6 +20,7 @@ class reporting:
         self.adv_ids =Events().get_adv_ids()
         
     def recupere_ktk_id(self, databases_ids):
+        print("ktk_id")
         if not databases_ids:
             return pd.DataFrame(columns=['database_id', 'ktk_id'])
 
@@ -53,6 +54,7 @@ class reporting:
         except (ValueError,TypeError):
             return 0
     def recuper_optimize(self, df_unique, batch_size=10):
+        print("optimized")
         endpoint = "https://konticreav2.kontikimedia.fr:5009/api/creativities/filter-plannifik"
         df_unique = df_unique.copy()
 
@@ -69,7 +71,6 @@ class reporting:
                     if None in (focus_id, base_id, router_id):
                         optimized_list.append("url_vide")
                         continue
-
                     params = [
                         ("focus_id", focus_id),
                         ("base_id", base_id),
@@ -102,6 +103,7 @@ class reporting:
         return list(set([str(x).strip() for x in adv_ids if str(x).strip().isdigit()]))
     
     def recupere_events(self, adv_ids):
+        print("events")
         adv_ids_clean = self.clean_adv_ids(adv_ids)
         if not adv_ids_clean:
             return pd.DataFrame()
@@ -154,6 +156,7 @@ class reporting:
         return df_events
 
     def recupere_contacts(self, dwh_ids, max_retry=3, sleep_sec=2, batch_size=5000):
+        print("contacts")
         cols = ["dwh_id", "age", "gender", "main_isp", "zipcode", "dep"]
 
         if not dwh_ids:
@@ -213,6 +216,7 @@ class reporting:
         return pd.DataFrame(columns=cols)
 
     def recupere_pg(self, adv_ids):
+        print("pg")
         adv_ids_clean = self.clean_adv_ids(adv_ids)
         if not adv_ids_clean:
             return pd.DataFrame(columns=["id_routers","ca","date_shedule"])

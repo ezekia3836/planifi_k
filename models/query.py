@@ -26,7 +26,6 @@ class Query:
         except Exception:
             return default
 
-
     def safe_int(self,value, default=0):
         try:
             return int(value or default)
@@ -93,7 +92,10 @@ class Query:
                 id_focus,
                 ktk_id
         """
-        rows = self._execute_query(query)
+        try:
+            rows = self._execute_query(query)
+        except Exception as e:
+            print("Erreur global_advertiser",e)
         if not rows:
             return {"advertiser_id": str(adv_id), "globales": {}, "bases": []}
 
@@ -200,8 +202,6 @@ class Query:
             push("gender", r["gender"])
             push("isp", r["main_isp"])
             push("age_civilite_isp", r["age_civilite_isp"])
-
-            
             brand_name = base64.b64decode(r['brand']).decode("utf-8").strip()
             existing_brand = next((b for b in base["brands"] if b["name"] == brand_name), None)
             optimized= r.get('optimized') or "optimized vide"
@@ -576,9 +576,7 @@ class Query:
         result['ktk_id']=ktk_value
         return result
 
-    def calendrier(self, adv_id):
-        top_months = 3       
-        seuil_ecpm = 0      
+    def calendrier(self, adv_id,min_sends=50,top_slots=5,min_month_sends=500, heure_min=6,heure_max=22):
 
         query = f"""
             SELECT
@@ -586,6 +584,8 @@ class Query:
                 toDayOfWeek(date_event) AS day,
                 toHour(date_event) AS hour,
                 SUM(sends) AS sends,
+                SUM(clicks) AS clicks,
+                SUM(opens) AS opens,
                 SUM(ca_per_router) AS ca
             FROM
             (
@@ -593,102 +593,117 @@ class Query:
                     id_routers,
                     date_event,
                     SUM(sends) AS sends,
+                    SUM(clicks) AS clicks,
+                    SUM(opens) AS opens,
                     MAX(ca) AS ca_per_router
                 FROM reporting
                 WHERE adv_id = {adv_id}
                 GROUP BY id_routers, date_event
             ) AS per_router
             GROUP BY month, day, hour
-            HAVING sends > 50
-            ORDER BY month, day, hour
+            HAVING sends >= {min_sends}
         """
-
         rows = self._execute_query(query)
 
-        best_month = {}
+        week_slots = []
+        month_slots = defaultdict(list)
+        season = defaultdict(lambda: {"sends": 0, "ca": 0,"clicks":0,"opens":0})
 
         for r in rows:
-
-            sends = r["sends"] or 0
-            ca = r["ca"] or 0
+            sends = r["sends"]
+            clicks = r["clicks"] or 0
+            opens = r["opens"] or 0
+            ca = r["ca"]
 
             if sends == 0:
                 continue
 
-            ecpm = round((ca / sends) * 1000, 3)
+            interactions = clicks + opens
+            interaction_rate = interactions / sends
 
-            if ecpm < seuil_ecpm:
-                continue
+            ecpm = (ca / sends) * 1000
+
+            score = (0.6 * ecpm) + (0.4 * interaction_rate * 1000)
 
             month = r["month"]
             day = r["day"]
             hour = r["hour"]
+            if hour<heure_min or hour>heure_max:
+                continue
+            slot = {
+                "day": day,
+                "hour": hour,
+                "ecpm": round(ecpm, 2),
+                "interaction_rate": round(interaction_rate, 4),
+                "score": round(score, 2)
+            }
 
-            if (month not in best_month or ecpm > best_month[month]["ecpm"]):
-                best_month[month] = {
-                    "month": month,
-                    "day": day,
-                    "hour": hour,
-                    "ecpm": ecpm 
-                }
-        top = sorted(best_month.values(),key=lambda x: x["ecpm"],reverse=True)[:top_months]
+            week_slots.append(slot)
+            month_slots[month].append(slot)
 
-        today = datetime.now()
-        results = []
-        for slot in top:
-            for d in range(1, 450):
-                future = today + timedelta(days=d)
-                if (future.month == slot["month"]and future.isoweekday() == slot["day"]):
-                    lancement = future.replace(hour=slot["hour"],minute=0,second=0,microsecond=0)
-                    if lancement > today:
-                        results.append({
-                            "mois": calendar.month_name[slot["month"]],
-                            "lancement": lancement.strftime("%Y-%m-%d %H:%M")
-                        })
-                        break
+            season[month]["sends"] += sends
+            season[month]["ca"] += ca
+            season[month]["clicks"] +=clicks
+            season[month]['opens'] +=opens
 
-        return results
+        best_week = sorted(week_slots, key=lambda x: x["score"], reverse=True)[:top_slots]
 
-    def best_segment(self, adv_id, min_sends=100):
-        query = f"""
-            SELECT age_range, gender, main_isp, age_civilite_isp, sends, ca
-            FROM reporting
-            WHERE adv_id={adv_id}
-        """
-        rows = self._execute_query(query)
+        week_dict = defaultdict(list)
 
-        total_sends = sum(r["sends"] or 0 for r in rows)
-        if total_sends == 0:
-            return []
+        for slot in best_week:
+            day_name = calendar.day_name[slot["day"] - 1]
+            if slot["hour"] not in week_dict[day_name]:
+                week_dict[day_name].append(f"{slot['hour']:02d}:{slot.get('minute',0):02d}")
 
-        segments = defaultdict(lambda: {"sends": 0, "ca": Decimal("0.0")})
+        week_results = [{"jour": day, "heure": sorted(hours)} for day, hours in week_dict.items()]
 
-        for r in rows:
-            sends = r["sends"] or 0
-            ca = Decimal(r["ca"] or 0)
-
-            key = r["age_civilite_isp"]
-            if sends == 0:
+        season_results = []
+        for month, data in season.items():
+            if data["sends"] < min_month_sends:
                 continue
 
-            segments[key]["sends"] += sends
-            proportion = Decimal(sends) / Decimal(total_sends)
-            segments[key]["ca"] += (ca * proportion).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
-        result = []
-        for seg, v in segments.items():
-            if v["sends"] < min_sends:
-                continue
-
-            ecpm = float((v["ca"] / Decimal(v["sends"]) * 1000).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
-            result.append({
-                "segment": seg,
-                "ecpm": ecpm
+            ecpm = (data["ca"] / data["sends"]) * 1000
+            sends = data['sends']
+            clicks = data['clicks']
+            opens = data['opens']
+            interactions = sends + clicks
+            interaction_rate = interactions /sends *100
+            score = (0.6 * ecpm) + (0.4 * interaction_rate * 1000)
+            season_results.append({
+                "mois": calendar.month_name[month],
+                "score":score,
+                "ecpm":ecpm
             })
+        season_results.sort(key=lambda x: x['score'],reverse=True)
+        season_results=[(x["mois"]) for x in season_results]
+        
+        result = {
+            "semaine": week_results,
+            "saisonnier": season_results
+        }
+        if not week_results:
+            result["message"] = "Aucun lancement recommandé cette semaine"
 
-        result.sort(key=lambda x: x["ecpm"], reverse=True)
-        return [r["segment"] for r in result[:10]]
-
+        return result
+    def best_segment(self, adv_id):
+        try:
+            query=f""" SELECT age_range,gender,main_isp,age_civilite_isp,dep AS departement, COUNT() as count FROM reporting WHERE adv_id={adv_id} GROUP BY age_range,gender,main_isp,age_civilite_isp,dep ORDER BY count DESC LIMIT 5 """
+            result=[]
+            rows = self._execute_query(query)
+            for r in rows:
+                r['departement']='O_departement' if r['departement']=="None" else r['departement']
+                result.append(
+                    {
+                        "tranche_âge":r['age_range'],
+                        "genre":r['gender'],
+                        "main_isp":r['main_isp'],
+                        "departement":r['departement']
+                    }
+                )
+            return result
+        
+        except Exception as e:
+            print("best_segment",e)
     def programmes(self,adv):
       programme = {
          "segment":self.best_segment(adv),
