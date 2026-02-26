@@ -3,8 +3,11 @@ from cron.p_activity import p_activity
 from cron.p_tags import p_tags
 from cron.p_advertiser import p_advertiser
 from reporting.report import reporting
+from reporting.report1 import reporting1
 import requests
 import pandas as pd
+
+from reporting.report2 import reporting2
 
 class Cron():
 
@@ -44,7 +47,19 @@ class Cron():
     def start_reporting(self):
         try:
             cron=reporting()
-            cron.run()
+            cron.report()
         except Exception as e:
             print(e)
 
+    def start_reporting1(self):
+        try:
+            cron=reporting1()
+            cron.report()
+        except Exception as e:
+            print(e)
+    def start_reporting2(self):
+        try:
+            cron = reporting2()
+            cron.report()
+        except Exception as e:
+            print(e)

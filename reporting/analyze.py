@@ -65,17 +65,16 @@ class analyse:
      def classify_advertiser(self, ecpm, taux_clicks):
         ecpm_level = self.classify_ecpm(ecpm)
         click_level = self.normalize_clicks(taux_clicks)
-        if ecpm_level == "bon" and (click_level == "bon" or click_level == "moyen"):
+        if ecpm_level == "bon" and (click_level == "bon" or click_level == "moyen" or click_level=="faible"):
             return "A"
-        elif ecpm_level == "moyen" and click_level == "moyen":
+        elif ecpm_level == "moyen" and (click_level == "moyen" or click_level=="faible"):
             return "B"
-        elif ecpm_level == "faible" and (click_level == "moyen" or click_level == "bon"):
+        elif ecpm_level == "faible" and (click_level == "bon" or click_level == "moyen"):
             return "C"
         elif ecpm_level == "faible" and click_level == "faible":
             return "D"
         else:
             return ""
-
 
      def analyse_ecpm(self,ecpm,sends):
          if sends<= config.MIN_SENDS_ECPM:

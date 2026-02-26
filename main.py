@@ -12,6 +12,7 @@ from datetime import datetime
 from cron.Cron import Cron
 from reporting.router_reporting import router as reporting_router
 from reporting.router_global import router as router_global
+from reporting.router2 import router as router2
 tgadv = TagsAdvertiser()
 
 origins = [
@@ -33,8 +34,9 @@ app.add_middleware(
 )
 
 #app.include_router(database_router.router, prefix="/database", tags=["Database"])
-app.include_router(reporting_router)
-app.include_router(router_global)
+#app.include_router(reporting_router)
+#app.include_router(router_global)
+app.include_router(router2)
 
 
 """@app.get("/")
@@ -48,7 +50,7 @@ def job_cron():
     #cron.start_cont()
     #cron.start_act()
     #cron.start_tags()
-    cron.start_reporting()
+    cron.start_reporting2()
     print(f"[{datetime.now()}] Exécution du cron  {datetime.now() - start}")
 
 # # Scheduler
