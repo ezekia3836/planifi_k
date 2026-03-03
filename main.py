@@ -50,7 +50,7 @@ def job_cron():
     #cron.start_cont()
     #cron.start_act()
     #cron.start_tags()
-    cron.start_reporting2()
+    #cron.start_reporting2()
     print(f"[{datetime.now()}] Exécution du cron  {datetime.now() - start}")
 
 # # Scheduler

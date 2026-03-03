@@ -9,8 +9,8 @@ class Query2:
         self.analyze = analyse()
         self.table = "dev_reporting_agg"
 
-    def _execute_query(self, query):
-        result = self.clk.query(query)
+    def _execute_query(self, query,params=None):
+        result = self.clk.query(query,parameters=params or {})
         return [dict(zip(result.column_names, r)) for r in result.result_rows]
 
     def safe_float(self,value, default=0.0):
@@ -40,8 +40,8 @@ class Query2:
         if match_range:
             return int(match_range.group(1))
         return 9999
-
     def global_advertiser(self, adv_id):
+
         query = f"""
             SELECT
                 database_id,
@@ -53,6 +53,7 @@ class Query2:
                 optimized,
                 main_isp,
                 date_shedule,
+
                 SUM(sends) AS sends,
                 SUM(clicks) AS clicks,
                 SUM(clickers) AS clickers,
@@ -61,41 +62,42 @@ class Query2:
                 SUM(unsubs) AS unsubs,
                 MAX(ca) AS ca,
                 groupUniqArray(segmentId) AS segmentId
+
             FROM {self.table}
-            WHERE adv_id = {adv_id}
+            WHERE adv_id = %(adv_id)s
             GROUP BY
                 database_id, id_routers, tag_id,
                 age_range, gender, main_isp,
                 brand, optimized, date_shedule
         """
 
-        rows = self._execute_query(query)
+        rows = self._execute_query(query, {"adv_id": adv_id})
+
         if not rows:
             return {"advertiser_id": str(adv_id), "globales": {}, "bases": []}
-
         bases = {}
+        decoded_brands = {}
 
         total = dict(sends=0, clicks=0, clickers=0, opens=0, openers=0, unsubs=0, ca=0)
 
-
-        def compute_rates(sends,openers, clickers, unsubs):
-            taux_clickers = round(clickers / sends * 100, 3) if sends else 0
-            taux_openers = round(openers / sends * 100, 3) if sends else 0
-            taux_unsubs = round(unsubs / sends * 100, 3) if sends else 0
-            taux_cto = round(clickers / openers * 100, 3) if openers else 0
-            return taux_clickers, taux_openers, taux_unsubs, taux_cto
+        def decode_brand(b):
+            if not b:
+                return ""
+            if b not in decoded_brands:
+                decoded_brands[b] = base64.b64decode(b).decode().strip()
+            return decoded_brands[b]
 
         for r in rows:
-            base_key = (r["database_id"], r["id_routers"], r["tag_id"])
+            key = (r["database_id"], r["id_routers"], r["tag_id"])
 
-            base = bases.setdefault(base_key, {
+            base = bases.setdefault(key, {
                 "database_id": r["database_id"],
                 "id_routers": r["id_routers"],
                 "tag_id": r["tag_id"],
                 "sends": 0, "clicks": 0, "clickers": 0,
                 "opens": 0, "openers": 0, "unsubs": 0,
                 "ca": 0,
-                "date_shedule": [],
+                "date_shedule": set(),
                 "SegmentIds": set(),
                 "brands": [],
                 "dimensions": {"age_range": {}, "gender": {}, "isp": {}}
@@ -108,6 +110,7 @@ class Query2:
             openers = r["openers"] or 0
             unsubs = r["unsubs"] or 0
             ca = r["ca"] or 0
+
             base["sends"] += sends
             base["clicks"] += clicks
             base["clickers"] += clickers
@@ -115,15 +118,6 @@ class Query2:
             base["openers"] += openers
             base["unsubs"] += unsubs
             base["ca"] += ca
-
-            if r.get("segmentId"):
-                base["SegmentIds"].update(r["segmentId"])
-
-            if r.get("date_shedule"):
-                if isinstance(r["date_shedule"], list):
-                    base["date_shedule"].extend(r["date_shedule"])
-                else:
-                    base["date_shedule"].append(r["date_shedule"])
 
             total["sends"] += sends
             total["clicks"] += clicks
@@ -133,12 +127,21 @@ class Query2:
             total["unsubs"] += unsubs
             total["ca"] += ca
 
+            if r.get("segmentId"):
+                base["SegmentIds"].update(r["segmentId"])
+
+            if r.get("date_shedule"):
+                if isinstance(r["date_shedule"], list):
+                    base["date_shedule"].update(r["date_shedule"])
+                else:
+                    base["date_shedule"].add(r["date_shedule"])
+
             def push_dim(dim, value):
                 if not value:
                     return
                 seg = base["dimensions"][dim].setdefault(value, {
                     "sends": 0, "clicks": 0, "clickers": 0,
-                    "opens": 0, "openers": 0, "unsubs": 0,"taux_clickers": 0, "taux_openers": 0, "taux_unsubs": 0,"taux_cto": 0,"analyses": {}
+                    "opens": 0, "openers": 0, "unsubs": 0
                 })
                 seg["sends"] += sends
                 seg["clicks"] += clicks
@@ -147,45 +150,41 @@ class Query2:
                 seg["openers"] += openers
                 seg["unsubs"] += unsubs
 
-                seg["taux_clickers"] = round(seg["clickers"] / seg["sends"] * 100, 3) if seg["sends"] else 0
-                seg["taux_openers"] = round(seg["openers"] / seg["sends"] * 100, 3) if seg["sends"] else 0
-                seg["taux_unsubs"] = round(seg["unsubs"] / seg["sends"] * 100, 3) if seg["sends"] else 0
-                seg["taux_cto"] = round(seg["clickers"] / seg["openers"] * 100, 3) if seg["openers"] else 0
-
-                seg["analyses"] = {
-                    "taux_clickers": self.analyze.analyze_click_rate(seg['taux_clickers']),
-                    "taux_cto": self.analyze.analyze_cto_rate(seg["taux_cto"], seg["openers"]),
-                    "taux_unsubs": self.analyze.analyze_unsub_rate(seg['taux_unsubs'])
-                }
-
             push_dim("age_range", r["age_range"])
             push_dim("gender", r["gender"])
             push_dim("isp", r["main_isp"])
 
-            brand_name = base64.b64decode(r["brand"]).decode().strip()
+            brand_name = decode_brand(r["brand"])
             optimized = r.get("optimized") or ""
 
-            existing = next((b for b in base["brands"] if b["name"] == brand_name), None)
+            brand_list = base["brands"]
+            brand = next((b for b in brand_list if b["name"] == brand_name), None)
 
-            if not existing:
-                existing = {
+            if not brand:
+                brand = {
                     "name": brand_name,
                     "creativities": optimized,
                     "sends": 0, "clicks": 0, "clickers": 0,
                     "opens": 0, "openers": 0, "unsubs": 0,
-                    "ca": 0,
-                    "analyses": {}
+                    "ca": 0
                 }
-                base["brands"].append(existing)
+                brand_list.append(brand)
 
-            existing["sends"] += sends
-            existing["clicks"] += clicks
-            existing["clickers"] += clickers
-            existing["opens"] += opens
-            existing["openers"] += openers
-            existing["unsubs"] += unsubs
-            existing["ca"] += ca
-            existing["creativities"] = optimized
+            brand["sends"] += sends
+            brand["clicks"] += clicks
+            brand["clickers"] += clickers
+            brand["opens"] += opens
+            brand["openers"] += openers
+            brand["unsubs"] += unsubs
+            brand["ca"] += ca
+
+        def compute_rates(sends, openers, clickers, unsubs):
+            return (
+                round(clickers / sends * 100, 3) if sends else 0,
+                round(openers / sends * 100, 3) if sends else 0,
+                round(unsubs / sends * 100, 3) if sends else 0,
+                round(clickers / openers * 100, 3) if openers else 0
+            )
 
         result_bases = []
 
@@ -196,13 +195,12 @@ class Query2:
             )
 
             ecpm = round(base["ca"] / base["sends"] * 1000, 3) if base["sends"] else 0
-            classification=self.analyze.classify_advertiser(ecpm,tc)
+            classification = self.analyze.classify_advertiser(ecpm, tc)
+
             for b in base["brands"]:
                 tc_b, to_b, tu_b, cto_b = compute_rates(
-                    b["sends"],b["openers"],
-                    b["clickers"], b["unsubs"]
+                    b["sends"], b["openers"], b["clickers"], b["unsubs"]
                 )
-
                 b.update({
                     "taux_clickers": tc_b,
                     "taux_openers": to_b,
@@ -214,6 +212,24 @@ class Query2:
                         "taux_unsubs": self.analyze.analyze_unsub_rate(tu_b)
                     }
                 })
+
+            for dim in base["dimensions"].values():
+                for seg in dim.values():
+                    tc_d, to_d, tu_d, cto_d = compute_rates(
+                        seg["sends"], seg["openers"],
+                        seg["clickers"], seg["unsubs"]
+                    )
+                    seg.update({
+                        "taux_clickers": tc_d,
+                        "taux_openers": to_d,
+                        "taux_unsubs": tu_d,
+                        "taux_cto": cto_d,
+                        "analyses": {
+                            "taux_clickers": self.analyze.analyze_click_rate(tc_d),
+                            "taux_cto": self.analyze.analyze_cto_rate(cto_d, seg["openers"]),
+                            "taux_unsubs": self.analyze.analyze_unsub_rate(tu_d)
+                        }
+                    })
 
             result_bases.append({
                 "database_id": base["database_id"],
@@ -230,11 +246,11 @@ class Query2:
                 "taux_openers": to,
                 "taux_unsubs": tu,
                 "taux_cto": cto,
-                "date_shedule": sorted(set(base["date_shedule"])),
+                "date_shedule": sorted(base["date_shedule"]),
                 "SegmentIds": sorted(base["SegmentIds"]),
                 "ecpm": ecpm,
                 "ca": round(base["ca"], 2),
-                "classification":classification,
+                "classification": classification,
                 "analyses": {
                     "taux_clickers": self.analyze.analyze_click_rate(tc),
                     "taux_cto": self.analyze.analyze_cto_rate(cto, base["openers"]),
@@ -267,66 +283,58 @@ class Query2:
             },
             "bases": sorted(result_bases, key=lambda x: (x["clickers"], x["ecpm"]), reverse=True)
         }
-    
+        
     def global_base(self, db_id):
 
-        def safe(value, default):
-            return value if value not in ("", None) else default
         query = f"""
             SELECT
-                adv_id,
-                id_routers,
-                age_range,
-                gender,
-                main_isp,
-                brand,
-                optimized,
-                sum(sends)     AS sends,
-                sum(clicks)    AS clicks,
-                sum(clickers)  AS clickers,
-                sum(opens)     AS opens,
-                sum(openers)   AS openers,
-                sum(unsubs)  AS unsubs,
-                max(ca)        AS ca,
+                adv_id, id_routers, age_range,
+                gender, main_isp, brand, optimized,
+                sum(sends) AS sends,
+                sum(clicks) AS clicks,
+                sum(clickers) AS clickers,
+                sum(opens) AS opens,
+                sum(openers) AS openers,
+                sum(unsubs) AS unsubs,
+                max(ca) AS ca,
                 tag_id
             FROM {self.table}
-            WHERE database_id = {db_id}
+            WHERE database_id = %(db_id)s
             GROUP BY
-                adv_id,
-                id_routers,
-                age_range,
-                gender,
-                main_isp,
-                brand,
-                optimized,
-                tag_id
+                adv_id, id_routers, age_range, gender,
+                main_isp, brand, optimized, tag_id
         """
-        rows = self._execute_query(query)
+
+        rows = self._execute_query(query, {"db_id": db_id})
+
         result = {
             "database_id": str(db_id),
-            "globales": {
-                "sends": 0,
-                "clicks": 0,
-                "clickers":0,
-                "opens": 0,
-                "openers":0,
-                "unsubs": 0,
-                "ca": 0.0
-            },
+            "globales": {"sends": 0, "clicks": 0, "clickers": 0, "opens": 0, "openers": 0, "unsubs": 0, "ca": 0.0},
             "advertisers": []
         }
         advertisers = {}
+        decoded_brands = {}
+
+        def decode_brand(b):
+            if not b:
+                return ""
+            if b not in decoded_brands:
+                decoded_brands[b] = base64.b64decode(b).decode("utf-8").strip()
+            return decoded_brands[b]
+
+        def safe(v, default):
+            return v if v not in ("", None) else default
+
         for r in rows:
             adv_id = str(r["adv_id"])
-            sends = r["sends"]
-            clicks = r["clicks"]
-            clickers = r["clickers"]
-            opens = r["opens"]
-            openers = r["openers"]
-            unsubs = r["unsubs"]
-            ca = r["ca"]
-            brand_name = base64.b64decode(r["brand"]).decode("utf-8").strip()
-            optimized_url = r.get("optimized") or "O_opt"
+            sends = r["sends"] or 0
+            clicks = r["clicks"] or 0
+            clickers = r["clickers"] or 0
+            opens = r["opens"] or 0
+            openers = r["openers"] or 0
+            unsubs = r["unsubs"] or 0
+            ca = r["ca"] or 0
+
             g = result["globales"]
             g["sends"] += sends
             g["clicks"] += clicks
@@ -335,32 +343,26 @@ class Query2:
             g["openers"] += openers
             g["unsubs"] += unsubs
             g["ca"] += ca
+
             adv = advertisers.setdefault(adv_id, {
                 "advertiser_id": adv_id,
-                "routers_seen": set(),
-                "id_routers":r["id_routers"],
-                "tag": r['tag_id'],
+                "id_routers": r["id_routers"],
+                "tag": r["tag_id"],
+                "brands_map": {},  
                 "brands": [],
-                "sends": 0,
-                "clicks": 0,
-                "clickers": 0,
-                "opens": 0,
-                "openers": 0,
-                "unsubs": 0,
+                "sends": 0, "clicks": 0, "clickers": 0,
+                "opens": 0, "openers": 0, "unsubs": 0,
                 "ca": 0.0,
-                "dimensions": {
-                    "age_range": {},
-                    "gender": {},
-                    "isp": {}
-                }
+                "dimensions": {"age_range": {}, "gender": {}, "isp": {}}
             })
-            adv["ca"] += ca
+
             adv["sends"] += sends
             adv["clicks"] += clicks
             adv["clickers"] += clickers
             adv["opens"] += opens
             adv["openers"] += openers
             adv["unsubs"] += unsubs
+            adv["ca"] += ca
 
             dims = {
                 "age_range": safe(r["age_range"], "O_age"),
@@ -369,12 +371,8 @@ class Query2:
             }
             for dim, val in dims.items():
                 seg = adv["dimensions"][dim].setdefault(val, {
-                    "sends": 0,
-                    "clicks":0,
-                    "clickers": 0,
-                    "opens":0,
-                    "openers": 0,
-                    "unsubs": 0
+                    "sends": 0, "clicks": 0, "clickers": 0,
+                    "opens": 0, "openers": 0, "unsubs": 0
                 })
                 seg["sends"] += sends
                 seg["clicks"] += clicks
@@ -382,107 +380,190 @@ class Query2:
                 seg["opens"] += opens
                 seg["openers"] += openers
                 seg["unsubs"] += unsubs
-                seg["taux_clickers"] = round(seg["clickers"] / seg["sends"] *100 if seg["sends"] else 0.0,3)
-                seg["taux_cto"] = round(seg["clickers"] / seg["openers"] *100 if seg["openers"] else 0.0,3)
-                seg["taux_unsubs"] = round(seg["unsubs"] / seg["sends"] *100 if seg["sends"] else 0.0,3)
-                analyses={
-                    "taux_clickers":self.analyze.analyze_click_rate(seg['taux_clickers']),
-                    "taux_cto":self.analyze.analyze_cto_rate(seg["taux_cto"],seg["openers"]),
-                    "taux_unsubs":self.analyze.analyze_unsub_rate(seg["taux_unsubs"])
-                }
-                seg["analyses"]=analyses
-            existing_brand = next((b for b in adv["brands"] if b["name"] == brand_name), None)
-            def compute_brand_metrics(b):
-                sends_b = b["sends"]
-                openers_b = b["openers"]
 
-                b["taux_clickers"] = round(b["clickers"] / sends_b * 100 if sends_b else 0.0, 3)
-                b["taux_openers"] = round(b["openers"] / sends_b * 100 if sends_b else 0.0, 3)
-                b["taux_unsubs"] = round(b["unsubs"] / sends_b * 100 if sends_b else 0.0, 3)
-                b["taux_cto"] = round(b["clickers"] / openers_b * 100 if openers_b else 0.0, 3)
-
-                b["analyses"] = {
-                    "taux_clickers": self.analyze.analyze_click_rate(b["taux_clickers"]),
-                    "taux_cto": self.analyze.analyze_cto_rate(b["taux_cto"], openers_b),
-                    "taux_unsubs": self.analyze.analyze_unsub_rate(b["taux_unsubs"])
-                }
-
-            if not existing_brand:
-                new_brand = {
+            brand_name = decode_brand(r["brand"])
+            optimized_url = r.get("optimized") or "O_opt"
+            brand = adv["brands_map"].get(brand_name)
+            if not brand:
+                brand = {
                     "name": brand_name,
                     "creativities": optimized_url,
-                    "sends": sends,
-                    "clicks": clicks,
-                    "clickers": clickers,
-                    "opens": opens,
-                    "openers": openers,
-                    "unsubs": unsubs,
-                    "ca": ca
+                    "sends": 0, "clicks": 0, "clickers": 0,
+                    "opens": 0, "openers": 0, "unsubs": 0,
+                    "ca": 0
                 }
-                compute_brand_metrics(new_brand)
-                adv["brands"].append(new_brand)
+                adv["brands_map"][brand_name] = brand
+                adv["brands"].append(brand)
 
-            else:
-                existing_brand["sends"] += sends
-                existing_brand["clicks"] += clicks
-                existing_brand["clickers"] += clickers
-                existing_brand["opens"] += opens
-                existing_brand["openers"] += openers
-                existing_brand["unsubs"] += unsubs
-                existing_brand["ca"] += ca
-                existing_brand["creativities"] = optimized_url
-                compute_brand_metrics(existing_brand)
+            brand["sends"] += sends
+            brand["clicks"] += clicks
+            brand["clickers"] += clickers
+            brand["opens"] += opens
+            brand["openers"] += openers
+            brand["unsubs"] += unsubs
+            brand["ca"] += ca
+            brand["creativities"] = optimized_url
+
+        def compute_rates(sends, openers, clickers, unsubs):
+            return (
+                round(clickers / sends * 100, 3) if sends else 0,
+                round(openers / sends * 100, 3) if sends else 0,
+                round(unsubs / sends * 100, 3) if sends else 0,
+                round(clickers / openers * 100, 3) if openers else 0
+            )
+
         for adv in advertisers.values():
-            sends = adv["sends"]
-            openers = adv["openers"]
-            adv["ecpm"] = round((adv["ca"] / sends) * 1000, 3) if sends else 0.0
-            adv["taux_clickers"] = round(adv["clickers"] / sends * 100 if sends else 0.0, 3)
-            adv["taux_openers"] = round(adv["openers"] / sends * 100 if sends else 0.0, 3)
-            adv["taux_unsubs"] = round(adv["unsubs"] / sends * 100 if sends else 0.0, 3)
-            adv["taux_cto"] = round(adv["clickers"] / openers * 100 if openers else 0.0, 3)
-            adv["classification"]=self.analyze.classify_advertiser(adv['ecpm'],adv['taux_clickers'])
-            analyses={
-                    "taux_clickers":self.analyze.analyze_click_rate(adv['taux_clickers']),
-                    "taux_cto":self.analyze.analyze_cto_rate(adv["taux_cto"],adv["openers"]),
-                    "taux_unsubs":self.analyze.analyze_unsub_rate(adv["taux_unsubs"])
-                }
-            adv["analyses"] = analyses
-            adv.pop("routers_seen")
+
+            tc, to, tu, cto = compute_rates(
+                adv["sends"], adv["openers"],
+                adv["clickers"], adv["unsubs"]
+            )
+
+            adv["ecpm"] = round((adv["ca"] / adv["sends"]) * 1000, 3) if adv["sends"] else 0
+            adv["taux_clickers"] = tc
+            adv["taux_openers"] = to
+            adv["taux_unsubs"] = tu
+            adv["taux_cto"] = cto
+            adv["classification"] = self.analyze.classify_advertiser(adv["ecpm"], tc)
+
+            adv["analyses"] = {
+                "taux_clickers": self.analyze.analyze_click_rate(tc),
+                "taux_cto": self.analyze.analyze_cto_rate(cto, adv["openers"]),
+                "taux_unsubs": self.analyze.analyze_unsub_rate(tu)
+            }
+
+            for dim in adv["dimensions"].values():
+                for seg in dim.values():
+                    tc_d, to_d,tu_d, cto_d = compute_rates(
+                        seg["sends"], seg["openers"],
+                        seg["clickers"], seg["unsubs"]
+                    )
+                    seg.update({
+                        "taux_clickers": tc_d,
+                        "taux_cto": cto_d,
+                        "taux_unsubs": tu_d,
+                        "analyses": {
+                            "taux_clickers": self.analyze.analyze_click_rate(tc_d),
+                            "taux_cto": self.analyze.analyze_cto_rate(cto_d, seg["openers"]),
+                            "taux_unsubs": self.analyze.analyze_unsub_rate(tu_d)
+                        }
+                    })
+            for b in adv["brands"]:
+                tc_b, to_b, tu_b, cto_b = compute_rates(
+                    b["sends"], b["openers"], b["clickers"], b["unsubs"]
+                )
+                b.update({
+                    "taux_clickers": tc_b,
+                    "taux_openers": to_b,
+                    "taux_unsubs": tu_b,
+                    "taux_cto": cto_b,
+                    "analyses": {
+                        "taux_clickers": self.analyze.analyze_click_rate(tc_b),
+                        "taux_cto": self.analyze.analyze_cto_rate(cto_b, b["openers"]),
+                        "taux_unsubs": self.analyze.analyze_unsub_rate(tu_b)
+                    }
+                })
+            adv.pop("brands_map")
             result["advertisers"].append(adv)
 
         result["advertisers"].sort(key=lambda x: x["ecpm"], reverse=True)
+
         g = result["globales"]
-        sends = g["sends"]
-        openers = g["openers"]
-        g["ecpm"] = round((g["ca"] / sends) * 1000 if sends else 0, 3)
-        g["taux_clickers"] = round(g["clickers"] / sends * 100 if sends else 0, 3)
-        g["taux_openers"] = round(g["openers"] / sends * 100 if sends else 0, 3)
-        g["taux_unsubs"] = round(g["unsubs"] / sends * 100 if sends else 0, 3)
-        g["taux_cto"] = round(g["clickers"] / openers * 100 if openers else 0, 3)
+        tc, to, tu, cto = compute_rates(
+            g["sends"], g["openers"],
+            g["clickers"], g["unsubs"]
+        )
+        g["ecpm"] = round((g["ca"] / g["sends"]) * 1000, 3) if g["sends"] else 0
+        g["taux_clickers"] = tc
+        g["taux_openers"] = to
+        g["taux_unsubs"] = tu
+        g["taux_cto"] = cto
         g["analyses"] = {
-            "taux_clickers": self.analyze.analyze_click_rate(g["taux_clickers"]),
-            "taux_cto": self.analyze.analyze_cto_rate(g["taux_cto"], openers),
-            "taux_unsubs": self.analyze.analyze_unsub_rate(g["taux_unsubs"])
+            "taux_clickers": self.analyze.analyze_click_rate(tc),
+            "taux_cto": self.analyze.analyze_cto_rate(cto, g["openers"]),
+            "taux_unsubs": self.analyze.analyze_unsub_rate(tu)
         }
         return result
     
-    def lis_advertisers(self):
+    def list_advertisers(self):
         try:
-            query=f""" SELECT DISTINCT dev.adv_id,a.name FROM {self.table} dev JOIN advertiser a ON dev.adv_id=a.id"""
-            rows=self._execute_query(query)
+            query = f"""
+                SELECT
+                    dev.adv_id,
+                    any(a.name) AS name
+                FROM {self.table} dev
+                INNER JOIN advertiser a ON dev.adv_id = a.id
+                GROUP BY dev.adv_id
+            """
+            rows = self._execute_query(query)
             return {
-                "total":len(rows),
-                "advertisers":rows
+                "total": len(rows),
+                "advertisers": rows
             }
         except Exception as e:
-            print("Erreur list_advertiser",e)
+            print("Erreur list_advertisers:", e)
+            return {"total": 0, "advertisers": []}
     def list_bases(self):
         try:
-            query=f""" SELECT DISTINCT dev.database_id,d.basename FROM {self.table} dev JOIN databases d ON dev.database_id= d.id"""
-            rows=self._execute_query(query)
-            return{
-                "total":len(rows),
-                "bases":rows
+            query = f"""
+                SELECT
+                    dev.database_id,
+                    any(d.basename) AS basename
+                FROM {self.table} dev
+                INNER JOIN databases d ON dev.database_id = d.id
+                GROUP BY dev.database_id
+            """
+            rows = self._execute_query(query)
+            return {
+                "total": len(rows),
+                "bases": rows
             }
         except Exception as e:
-            print("Erreur list_bases",e)
+            print("Erreur list_bases:", e)
+            return {"total": 0, "bases": []}
+        
+    """def recommend_subject(self, adv_id):
+        query = f
+            SELECT
+                segmentId,
+                age_range,
+                gender,
+                main_isp,
+                subject,
+                optimized,
+                SUM(sends) AS sends,
+                SUM(openers) AS openers,
+                SUM(clickers) AS clickers,
+                SUM(unsubs) AS unsubs
+            FROM {self.table}
+            WHERE adv_id = %(adv_id)s
+            GROUP BY segmentId,age_range, gender, main_isp,subject,optimized
+        
+        rows = self._execute_query(query, {"adv_id": adv_id})
+        best_subjects = {}
+        for r in rows:
+            segment_key = (r["segmentId"], r["age_range"], r["gender"], r["main_isp"])
+            sends = r["sends"] or 0
+            openers = r["openers"] or 0
+            clickers = r["clickers"] or 0
+            unsubs = r["unsubs"] or 0
+            if sends == 0:
+                continue  
+            open_rate = openers / sends * 100 if sends else 0
+            cto_rate = clickers / openers * 100 if openers else 0
+            unsub_rate = unsubs / sends * 100 if sends else 0
+            score = open_rate * 0.6 + cto_rate * 0.3 - unsub_rate * 0.1
+            current_best = best_subjects.get(segment_key)
+            if not current_best or score > current_best["score"]:
+                best_subjects[segment_key] = {
+                    "segmentId": r["segmentId"],
+                    "MessageSubject":r["subject"],
+                    "age_range": r["age_range"],
+                    "gender": r["gender"],
+                    "main_isp": r["main_isp"],
+                    "optimized":r["optimized"],
+                    "score": round(score, 3)
+                }
+        result = list(best_subjects.values())
+        result.sort(key=lambda x: x["score"],reverse=True)
+        return result"""
