@@ -332,12 +332,11 @@ class reporting2:
         df_grouped['updated_at']=datetime.now()
         columns_final = [
             "database_id","country","segmentId","subject","brand","tag_id","adv_id","id_routers","affiliate_id","ListId","zipcode","dep","sends","opens","openers",
-            "clicks","clickers","unsubs","age_range","gender","main_isp","age_gender_isp","ca","date_shedule","optimized","updated_at"]
+            "clicks","clickers","unsubs","age_range","gender","main_isp","age_gender_isp","ca","date_shedule","date_event","optimized","updated_at"]
         df_grouped = df_grouped[columns_final]
         def prepare_for_clickhouse(df_grouped):
             df_grouped = df_grouped.copy()
-            int_cols = [
-                "database_id", "segmentId","tag_id", "adv_id","sends", "opens", "openers", "clicks", "clickers", "unsubs","ca","ListId","affiliate_id","country","affiliate_id"]
+            int_cols = ["database_id", "segmentId","tag_id", "adv_id","sends", "opens", "openers", "clicks", "clickers", "unsubs","ca","ListId","affiliate_id","country","affiliate_id"]
             for col in int_cols:
                 df_grouped[col] = df_grouped[col].fillna(0).astype(np.uint32)
             df_grouped["brand"] = df_grouped["brand"].astype("string").fillna("brand_vide")
@@ -346,6 +345,7 @@ class reporting2:
             for col in str_cols:
                 df_grouped[col] = df_grouped[col].astype("string").fillna("")
             df_grouped["updated_at"] = pd.to_datetime(df_grouped["updated_at"]).fillna(datetime.now())
+            df_grouped["date_event"] = pd.to_datetime(df_grouped["date_event"]).fillna(datetime.now())
             return df_grouped
         df_grouped = prepare_for_clickhouse(df_grouped)
         chunk_size = 1000

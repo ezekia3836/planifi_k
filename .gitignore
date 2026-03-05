@@ -15,4 +15,5 @@ temp_sl/
 *.txt
 *.png
 *.xlsx
+*.conf
 app.env

@@ -465,9 +465,7 @@ class Query2:
                 })
             adv.pop("brands_map")
             result["advertisers"].append(adv)
-
         result["advertisers"].sort(key=lambda x: x["ecpm"], reverse=True)
-
         g = result["globales"]
         tc, to, tu, cto = compute_rates(
             g["sends"], g["openers"],
