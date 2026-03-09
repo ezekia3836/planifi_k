@@ -27,7 +27,7 @@ app = FastAPI(title="PlanifiK", lifespan=lifespan)
 # Middleware CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -52,3 +52,4 @@ def job_cron():
 #scheduler = BackgroundScheduler()
 #scheduler.add_job(job_cron, 'interval', minutes=2)  # ex: toutes les 2 minutes
 #scheduler.start()
+job_cron()

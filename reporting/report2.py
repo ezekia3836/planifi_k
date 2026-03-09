@@ -7,8 +7,6 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from sqlalchemy import text
 import pandas as pd
-import json
-import os
 import numpy as np
 class reporting2:
     def __init__(self):
@@ -51,18 +49,18 @@ class reporting2:
             return int(f)
         except (ValueError, TypeError):
             return 0
-
     def clean_adv_ids(self, adv_ids):
         return list(set([str(x).strip() for x in adv_ids if str(x).strip().isdigit()]))
     
     def recupere_pg(self, batch=1000):
         query = text("""
             SELECT vd.id AS id_focus,
-                vd.campaingkind AS ca,
+                pa.caeur AS ca,
                 COALESCE(json_agg(DISTINCT vd.date_shedule), '[]'::json) AS date_shedule,
                 COALESCE(json_agg(DISTINCT idsendouts.idsendout), '[]'::json) AS id_routers
             FROM visu.v2_data vd
             JOIN visu.v2_status st ON st.id = vd.status
+            LEFT JOIN visu.v2_payoutinfo pa ON pa.id_data=vd.id
             LEFT JOIN LATERAL (
                 SELECT vd1.idsendout
                 FROM (
@@ -78,10 +76,8 @@ class reporting2:
                     AND vd2.idsendout IS NOT NULL
                 ) AS vd1
             ) AS idsendouts ON TRUE
-            WHERE st.id = 5
-            GROUP BY vd.campaingkind, vd.id
+            WHERE st.id = 5 GROUP BY pa.caeur, vd.id ORDER BY vd.id ASC LIMIT 5
         """)
-
         pg_map = {}
         try:
             with self.pg.connect() as conn:
@@ -91,20 +87,15 @@ class reporting2:
                     rows = result.fetchmany(batch)
                     if not rows:
                         break
-
                     for row in rows:
                         id_focus, ca, date_shedule, id_routers_list = row
-                        print(row)
                         if not id_routers_list:
                             continue
-
                         if isinstance(id_routers_list, str):
                             continue 
-
                         for id_r in id_routers_list:
                             if id_r is None:
                                 continue
-
                             pg_map[str(id_r)] = {
                                 "id_focus": str(id_focus),
                                 "ca": ca,
@@ -156,12 +147,12 @@ class reporting2:
             batch = dwh_ids[i:i+batch_size]
             batch_str = ",".join(f"'{x}'" for x in batch)
             query = f"""
-                SELECT dwh_id, argMax(age, updated_at) AS age, argMax(gender, updated_at) AS gender,
+                SELECT database_id, argMax(age, updated_at) AS age, argMax(gender, updated_at) AS gender,
                        argMax(main_isp, updated_at) AS main_isp, argMax(zipcode, updated_at) AS zipcode,
                        argMax(dep, updated_at) AS dep
                 FROM prod_contacts
-                WHERE dwh_id IN ({batch_str})
-                GROUP BY dwh_id
+                WHERE database_id IN ({batch_str})
+                GROUP BY database_id
             """
             try:
                 r = self.resilient_call(self.clk.query, query)
@@ -188,7 +179,6 @@ class reporting2:
             return {}
     def recuper_optimize(self, rows_list, chunck=50):
         endpoint = "https://konticreav2.kontikimedia.fr:5009/api/creativities/filter-plannifik"
-
         session = requests.Session()
         retry_strategy = Retry(
             total=3, 
@@ -221,10 +211,8 @@ class reporting2:
                 except Exception as e:
                     self.notifier_erreur(f"Optimized erreur: {e}")
                     opt = "url_vide"
-
                 optimized_map[(str(id_routers), str(id_focus), str(ktk_id))] = opt
             time.sleep(0.05)
-
         return optimized_map
     
     def report(self):
@@ -275,7 +263,7 @@ class reporting2:
         if df_final.empty:
             return
         filtered_rows = df_final.to_dict("records")
-        dwh_ids = list({r["dwh_id"] for r in filtered_rows if r.get("dwh_id")})
+        dwh_ids = list({r["database_id"] for r in filtered_rows if r.get("database_id")})
         contacts_map = self.resilient_call(self.recupere_contacts, dwh_ids)
         bins = [0,18,25,35,45,55,65,75,float("inf")]
         labels = ['0-18','18-24','25-34','35-44','45-54','55-64','65-74','75+']
@@ -315,7 +303,7 @@ class reporting2:
             r["optimized"] = optimized_map.get(key, "url_vide")
         df_final = pd.DataFrame(filtered_rows)
         group_cols = [
-            "database_id","segmentId","subject","adv_id","id_routers","tag_id","brand","age_range","gender","main_isp","age_gender_isp","optimized","country","ListId","zipcode","dep","affiliate_id"
+            "database_id","segmentId","subject","adv_id","id_routers","tag_id","brand","age_range","date_event","gender","main_isp","age_gender_isp","optimized","country","ListId","zipcode","dep","affiliate_id"
         ]
         df_grouped = df_final.groupby(group_cols, observed=True).agg(
             sends=("sends","sum"),

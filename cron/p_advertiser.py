@@ -25,7 +25,6 @@ class p_advertiser:
                 user_update
             FROM visu.advertiser
         """
-
         return pd.read_sql_query(
             query,
             self.pg,
