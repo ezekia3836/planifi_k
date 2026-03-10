@@ -27,6 +27,7 @@ conf/
 *.xlsx
 *.conf
 *.txt
+reporting/*
 !requirement.txt 
 reporting/query.py
 reporting/app.env
