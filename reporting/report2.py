@@ -56,7 +56,7 @@ class reporting2:
         query = text("""
             SELECT vd.id AS id_focus,
                 pa.caeur AS ca,
-                COALESCE(json_agg(DISTINCT vd.date_shedule), '[]'::json) AS date_shedule,
+                COALESCE(json_agg(DISTINCT vd.date_shedule), '[]'::json) AS date_schedule,
                 COALESCE(json_agg(DISTINCT idsendouts.idsendout), '[]'::json) AS id_routers
             FROM visu.v2_data vd
             JOIN visu.v2_status st ON st.id = vd.status
@@ -76,7 +76,7 @@ class reporting2:
                     AND vd2.idsendout IS NOT NULL
                 ) AS vd1
             ) AS idsendouts ON TRUE
-            WHERE st.id = 5 GROUP BY pa.caeur, vd.id ORDER BY vd.id ASC LIMIT 5
+            WHERE st.id = 5 GROUP BY pa.caeur, vd.id
         """)
         pg_map = {}
         try:
@@ -88,7 +88,7 @@ class reporting2:
                     if not rows:
                         break
                     for row in rows:
-                        id_focus, ca, date_shedule, id_routers_list = row
+                        id_focus, ca, date_schedule, id_routers_list = row
                         if not id_routers_list:
                             continue
                         if isinstance(id_routers_list, str):
@@ -99,7 +99,7 @@ class reporting2:
                             pg_map[str(id_r)] = {
                                 "id_focus": str(id_focus),
                                 "ca": ca,
-                                "date_shedule": date_shedule or []
+                                "date_schedule": date_schedule or []
                             }
             return pg_map
 
@@ -256,7 +256,7 @@ class reporting2:
         if temp_rows:
             self._process_batch(temp_rows)
 
-    def _process_batch(self, rows_batch, database_id=19):
+    def _process_batch(self, rows_batch, database_id=42):
         df_final = pd.DataFrame(rows_batch)
         if database_id is not None:
             df_final = df_final[df_final["database_id"] == database_id]
@@ -303,7 +303,7 @@ class reporting2:
             r["optimized"] = optimized_map.get(key, "url_vide")
         df_final = pd.DataFrame(filtered_rows)
         group_cols = [
-            "database_id","segmentId","subject","adv_id","id_routers","tag_id","brand","age_range","date_event","gender","main_isp","age_gender_isp","optimized","country","ListId","zipcode","dep","affiliate_id"
+            "database_id","segmentId","subject","adv_id","id_routers","tag_id","brand","date_event","age_range","gender","main_isp","age_gender_isp","optimized","country","ListId","zipcode","dep","affiliate_id"
         ]
         df_grouped = df_final.groupby(group_cols, observed=True).agg(
             sends=("sends","sum"),
@@ -315,12 +315,13 @@ class reporting2:
             complaints=("complaints","sum"),
             bounces=("bounces","sum"),
             ca=("ca","max"),
-            date_shedule=("date_shedule", lambda x: sorted({d for sub in x if isinstance(sub, list) for d in sub}))
+            date_schedule=("date_schedule", lambda x: sorted({d for sub in x if isinstance(sub, list) for d in sub}))
         ).reset_index()
         df_grouped['updated_at']=datetime.now()
+        
         columns_final = [
             "database_id","country","segmentId","subject","brand","tag_id","adv_id","id_routers","affiliate_id","ListId","zipcode","dep","sends","opens","openers",
-            "clicks","clickers","unsubs","age_range","gender","main_isp","age_gender_isp","ca","date_shedule","date_event","optimized","updated_at"]
+            "clicks","clickers","unsubs","age_range","gender","main_isp","age_gender_isp","ca","date_schedule","date_event","optimized","updated_at"]
         df_grouped = df_grouped[columns_final]
         def prepare_for_clickhouse(df_grouped):
             df_grouped = df_grouped.copy()

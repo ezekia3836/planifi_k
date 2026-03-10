@@ -19,7 +19,7 @@ class Stats(BaseModel):
     taux_unsubs: float
 
 class DimensionStats(Stats):
-    analyses: Analyses
+    analyses: Analyses={}
 
 class Dimensions(BaseModel):
     age_range:Optional[Dict[str,Any]]=None
@@ -58,7 +58,7 @@ class BaseItem(BaseModel):
     ca: float=0.0
     ecpm: float=0.0
     classification:str
-    date_shedule: List[date]
+    date_schedule: List[date]
     SegmentIds: List[int]
     analyses: Analyses={}
     dimensions: Dimensions={}

@@ -1,8 +1,7 @@
 from models.query2 import Query2
-from fastapi import APIRouter,Depends
+from fastapi import APIRouter,Depends, Query
 from typing import Optional
 from fastapi_cache.decorator import cache 
-from reporting.security import verify_internal_token
 from reporting.schema2 import (
     GlobalAdvertiserResponse,
     GlobalBaseResponse,
@@ -11,7 +10,7 @@ from reporting.schema2 import (
 )
 query = Query2()
 router = APIRouter(prefix="/reporting", 
-    tags=["Reporting"],dependencies=[Depends(verify_internal_token)])
+    tags=["Reporting"])
 @router.get("/advertiser/{adv}", summary="Rapport global d'un advertiser2",response_model=GlobalAdvertiserResponse)
 @cache(expire=60)
 async def get_report_advertiser(adv: int):
@@ -20,16 +19,23 @@ async def get_report_advertiser(adv: int):
 @cache(expire=60)
 async def get_report_base(base_id:int):
     return query.global_base(base_id)
-@router.get("/list_advertisers/",summary="Liste des advertisers dans reporting",response_model=AdvertisersResponse)
+@router.get("/all_advertisers/",summary="tout les advertisers dans reporting")
 @cache(expire=60)
-async def get_list_advertisers():
-    return query.list_advertisers()
-@router.get("/list_bases/",summary="Liste des bases dans reporting",response_model=BasesResponse)
+async def all_advertisers(
+    date_schedule:Optional[str]=None,
+    date_start:Optional[str]=None,
+    date_end:Optional[str]=None,
+    tags:list[str] | None =Query(None)
+):
+    return query.all_advertisers(date_schedule=date_schedule,date_start=date_start,date_end=date_end,tags=tags)
+
+@router.get("/all_bases/",summary="Liste toutes bases dans reporting")
 @cache(expire=60)
-async def get_list_bases():
-    return query.list_bases()
-"""
-@router.get("/objet/{adv_id}")
-@cache(expire=60)
-async def get_best_objet(adv_id:int):
-    return query.recommend_subject(adv_id)"""
+async def all_bases(
+    date_schedule:Optional[str]=None,
+    date_start:Optional[str]=None,
+    date_end:Optional[str]=None,
+    country: list[str] | None = Query(None),
+    tags: list[str] | None = Query(None)
+):
+    return query.all_bases(country=country,tags=tags,date_schedule=date_schedule,date_start=date_start,date_end=date_end)

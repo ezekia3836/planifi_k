@@ -3,6 +3,7 @@ from config.ClickHouseConfig import ClickHouseConfig
 from reporting.analyze import analyse
 import base64
 import math
+import re
 class Query2:
     def __init__(self):
         self.clk = ClickHouseConfig().getClient_prod()
@@ -52,8 +53,7 @@ class Query2:
                 brand,
                 optimized,
                 main_isp,
-                date_shedule,
-
+                date_schedule,
                 SUM(sends) AS sends,
                 SUM(clicks) AS clicks,
                 SUM(clickers) AS clickers,
@@ -68,7 +68,7 @@ class Query2:
             GROUP BY
                 database_id, id_routers, tag_id,
                 age_range, gender, main_isp,
-                brand, optimized, date_shedule
+                brand, optimized, date_schedule
         """
 
         rows = self._execute_query(query, {"adv_id": adv_id})
@@ -97,7 +97,7 @@ class Query2:
                 "sends": 0, "clicks": 0, "clickers": 0,
                 "opens": 0, "openers": 0, "unsubs": 0,
                 "ca": 0,
-                "date_shedule": set(),
+                "date_schedule": set(),
                 "SegmentIds": set(),
                 "brands": [],
                 "dimensions": {"age_range": {}, "gender": {}, "isp": {}}
@@ -130,11 +130,11 @@ class Query2:
             if r.get("segmentId"):
                 base["SegmentIds"].update(r["segmentId"])
 
-            if r.get("date_shedule"):
-                if isinstance(r["date_shedule"], list):
-                    base["date_shedule"].update(r["date_shedule"])
+            if r.get("date_schedule"):
+                if isinstance(r["date_schedule"], list):
+                    base["date_schedule"].update(r["date_schedule"])
                 else:
-                    base["date_shedule"].add(r["date_shedule"])
+                    base["date_schedule"].add(r["date_schedule"])
 
             def push_dim(dim, value):
                 if not value:
@@ -246,7 +246,7 @@ class Query2:
                 "taux_openers": to,
                 "taux_unsubs": tu,
                 "taux_cto": cto,
-                "date_shedule": sorted(base["date_shedule"]),
+                "date_schedule": sorted(base["date_schedule"]),
                 "SegmentIds": sorted(base["SegmentIds"]),
                 "ecpm": ecpm,
                 "ca": round(base["ca"], 2),
@@ -482,86 +482,99 @@ class Query2:
             "taux_unsubs": self.analyze.analyze_unsub_rate(tu)
         }
         return result
-    
-    def list_advertisers(self):
-        try:
-            query = f"""
-                SELECT
-                    dev.adv_id,
-                    any(a.name) AS name
-                FROM {self.table} dev
-                INNER JOIN advertiser a ON dev.adv_id = a.id
-                GROUP BY dev.adv_id
-            """
-            rows = self._execute_query(query)
-            return {
-                "total": len(rows),
-                "advertisers": rows
-            }
-        except Exception as e:
-            print("Erreur list_advertisers:", e)
-            return {"total": 0, "advertisers": []}
-    def list_bases(self):
-        try:
-            query = f"""
-                SELECT
-                    dev.database_id,
-                    any(d.basename) AS basename
-                FROM {self.table} dev
-                INNER JOIN databases d ON dev.database_id = d.id
-                GROUP BY dev.database_id
-            """
-            rows = self._execute_query(query)
-            return {
-                "total": len(rows),
-                "bases": rows
-            }
-        except Exception as e:
-            print("Erreur list_bases:", e)
-            return {"total": 0, "bases": []}
-        
-    """def recommend_subject(self, adv_id):
-        query = f
-            SELECT
-                segmentId,
-                age_range,
-                gender,
-                main_isp,
-                subject,
-                optimized,
-                SUM(sends) AS sends,
-                SUM(openers) AS openers,
-                SUM(clickers) AS clickers,
-                SUM(unsubs) AS unsubs
-            FROM {self.table}
-            WHERE adv_id = %(adv_id)s
-            GROUP BY segmentId,age_range, gender, main_isp,subject,optimized
-        
-        rows = self._execute_query(query, {"adv_id": adv_id})
-        best_subjects = {}
-        for r in rows:
-            segment_key = (r["segmentId"], r["age_range"], r["gender"], r["main_isp"])
-            sends = r["sends"] or 0
-            openers = r["openers"] or 0
-            clickers = r["clickers"] or 0
-            unsubs = r["unsubs"] or 0
-            if sends == 0:
-                continue  
-            open_rate = openers / sends * 100 if sends else 0
-            cto_rate = clickers / openers * 100 if openers else 0
-            unsub_rate = unsubs / sends * 100 if sends else 0
-            score = open_rate * 0.6 + cto_rate * 0.3 - unsub_rate * 0.1
-            current_best = best_subjects.get(segment_key)
-            if not current_best or score > current_best["score"]:
-                best_subjects[segment_key] = {
-                    "segmentId": r["segmentId"],
-                    "MessageSubject":r["subject"],
-                    "age_range": r["age_range"],
-                    "gender": r["gender"],
-                    "main_isp": r["main_isp"],
-                    "optimized":r["optimized"],
-                    "score": round(score, 3)
+    def all_advertisers(self,date_schedule=None,date_start=None,date_end=None,tags=None):
+        query=""" SELECT r.adv_id,a.name,SUM(r.sends) AS sends,SUM(r.openers) AS openers,SUM(clickers) AS clickers,SUM(unsubs) AS unsubs,round(SUM(r.clickers)/SUM(r.openers)*100,3) as taux_cto,
+           round(SUM(r.openers)/SUM(r.sends)*100,3) AS taux_openers, round(SUM(r.clickers)/SUM(r.sends)*100,3) AS taux_clickers,round(SUM(r.unsubs)/SUM(r.sends)*100,3) AS taux_unsubs
+          FROM dev_reporting_agg r JOIN advertiser a ON r.adv_id=a.id """
+        joins=[]
+        conditions=[]
+        if tags:
+            if isinstance(tags, str):
+                tags = [tags]
+            joins.append("JOIN tags t ON r.tag_id = t.id")
+            tags_value = ",".join([f"'{t}'" for t in tags])
+            conditions.append(f"t.tag IN ({tags_value})")
+        if date_schedule:
+            conditions.append(f"has(r.date_schedule, '{date_schedule}')")
+        if date_start and date_end:
+            conditions.append(
+                f"arrayExists(x -> x BETWEEN '{date_start}' AND '{date_end}', r.date_schedule)")
+        if joins:
+            query+=" ".join(joins)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " GROUP BY r.adv_id,a.name"
+        rows= self._execute_query(query)
+        result=[]
+        for row in rows:
+            result.append({
+                "advrtiser_id":row["adv_id"],
+                "advertiser_name":row["name"],
+                "globales":{
+                    "sends":row["sends"],
+                    "openers":row["openers"],
+                    "clickers":row["clickers"],
+                    "unsubs":row["unsubs"],
+                    "taux_openers":row["taux_openers"],
+                    "taux_clickers":row["taux_clickers"],
+                    "taux_unsubs":row["taux_unsubs"],
+                    "analyse":{
+                            "taux_clickers":self.analyze.analyze_click_rate(row['taux_clickers']),
+                            "taux_cto":self.analyze.analyze_cto_rate(row["taux_cto"],row["openers"]),
+                            "taux_unsubs": self.analyze.analyze_unsub_rate(row["taux_unsubs"])
+                        }
                 }
-        result = list(best_subjects.values())
-        result.sort(key=lambda x: x["score"],reverse=True)
-        return result"""
+            })
+        return result
+    
+    def all_bases(self,country=None,tags=None,date_schedule=None,date_start=None,date_end=None):
+        query=""" 
+        SELECT r.database_id,d.basename,SUM(r.sends) AS sends,SUM(r.openers) AS openers,SUM(r.clickers) AS clickers,SUM(r.unsubs) AS unsubs, 
+        round(SUM(r.openers)/SUM(r.sends)*100,3) AS taux_openers, round(SUM(r.clickers)/SUM(r.openers)*100,3) as taux_cto, round(SUM(r.clickers)/SUM(r.sends)*100,3) AS taux_clickers,round(SUM(r.unsubs)/SUM(r.sends)*100,3) AS taux_unsubs
+        FROM dev_reporting_agg r JOIN databases d ON r.database_id=d.id """
+        joins=[]
+        conditions=[]
+        if tags:
+            if isinstance(tags, str):
+                tags=[tags]
+            joins.append("JOIN tags t ON r.tag_id=t.id")
+            tags_value= ",".join((f"'{t}'" for t in tags))
+            conditions.append(f"t.tag IN ({tags_value})")
+        if country:
+            if isinstance(country, str):
+                country=[country]
+            joins.append("JOIN country c ON r.country=c.id")
+            country_values= ",".join((f"'{c}'" for c in country))
+            conditions.append(f"c.dwh_name IN ({country_values})")
+        if date_schedule:
+            conditions.append(f"has(r.date_schedule, '{date_schedule}')")
+        if date_start and date_end:
+             conditions.append(
+                f"arrayExists(x -> x BETWEEN '{date_start}' AND '{date_end}', r.date_schedule)")
+        if joins:
+            query+=" ".join(joins)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " GROUP BY r.database_id,d.basename"
+        rows= self._execute_query(query)
+        result=[]
+        for row in rows:
+            result.append({
+                "database_id":row["database_id"],
+                "database_name":row["basename"],
+                "globales":{
+                        "sends":row["sends"],
+                        "openers":row["openers"],
+                        "clickers":row["clickers"],
+                        "usubs":row["unsubs"],
+                        "taux_openers":row["taux_openers"],
+                        "taux_clickers":row["taux_clickers"],
+                        "taux_unsubs":row["taux_unsubs"],
+                        "analyse":{
+                            "taux_clickers":self.analyze.analyze_click_rate(row['taux_clickers']),
+                            "taux_cto":self.analyze.analyze_cto_rate(row["taux_cto"],row["openers"]),
+                            "taux_unsubs": self.analyze.analyze_unsub_rate(row["taux_unsubs"])
+                        }
+                }
+            })
+        return result
