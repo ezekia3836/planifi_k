@@ -9,6 +9,7 @@ venv/
 
 config/*
 !config/ClickHouseConfig.py
+!config/PgConfig.py
 
 Verisure/
 google/
