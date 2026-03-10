@@ -147,12 +147,12 @@ class reporting2:
             batch = dwh_ids[i:i+batch_size]
             batch_str = ",".join(f"'{x}'" for x in batch)
             query = f"""
-                SELECT database_id, argMax(age, updated_at) AS age, argMax(gender, updated_at) AS gender,
+                SELECT dwh_id, argMax(age, updated_at) AS age, argMax(gender, updated_at) AS gender,
                        argMax(main_isp, updated_at) AS main_isp, argMax(zipcode, updated_at) AS zipcode,
                        argMax(dep, updated_at) AS dep
                 FROM prod_contacts
-                WHERE database_id IN ({batch_str})
-                GROUP BY database_id
+                WHERE dwh_id IN ({batch_str})
+                GROUP BY dwh_id
             """
             try:
                 r = self.resilient_call(self.clk.query, query)
@@ -263,7 +263,7 @@ class reporting2:
         if df_final.empty:
             return
         filtered_rows = df_final.to_dict("records")
-        dwh_ids = list({r["database_id"] for r in filtered_rows if r.get("database_id")})
+        dwh_ids = list({r["dwh_id"] for r in filtered_rows if r.get("dwh_id")})
         contacts_map = self.resilient_call(self.recupere_contacts, dwh_ids)
         bins = [0,18,25,35,45,55,65,75,float("inf")]
         labels = ['0-18','18-24','25-34','35-44','45-54','55-64','65-74','75+']
