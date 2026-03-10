@@ -3,7 +3,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-
+app.env
 .venv/
 venv/
 
@@ -27,7 +27,6 @@ conf/
 *.xlsx
 *.conf
 *.txt
-reporting/*
 !requirement.txt 
 reporting/query.py
 reporting/app.env
