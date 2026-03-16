@@ -27,7 +27,7 @@ class autoreport:
                 WHERE r.adv_id = %(adv_id)s GROUP BY segment, tag, country, day, hour,database_id,month
             """
             rows = self._execute_query(query, params={"adv_id": adv_id})
-            df_by_month = [row for row in rows if row["month"]==current_month]
+            df_by_month = [row for row in rows if row["month"]==current_month+7]
             scored_data = []
             for r in df_by_month:
                 sends = r["sends"]

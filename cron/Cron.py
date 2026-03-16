@@ -1,7 +1,9 @@
 from cron.p_contact import p_contact
 from cron.p_activity import p_activity
 from cron.p_advertiser import p_advertiser
+from reporting import auto_plann
 from reporting.reporting_final import reporting as final
+from reporting.auto_plann import AutoPlann
 import requests
 import pandas as pd
 
@@ -17,7 +19,13 @@ class Cron():
         except Exception as e:
             print('error at cron contacts ', e)
             pass
-
+    def start_auto_plan(self):
+        try:
+            cron = AutoPlann()
+            cron.run()
+        except Exception as e:
+            print('error at cron auto_plan', e)
+            pass
     def start_act(self):
         try:
             cron = p_activity()

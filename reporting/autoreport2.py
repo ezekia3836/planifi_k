@@ -193,7 +193,7 @@ class AutoReport:
         return response.choices[0].message.content
 
     def generate_reporting(self):
-        current_date = datetime.now()
+        current_date = datetime.now()+7
         adv_ids = self.get_adv_ids()
         print(f"[AutoReport] {len(adv_ids)} advertisers actifs ce mois")
         candidats = self.get_candidates(adv_ids)

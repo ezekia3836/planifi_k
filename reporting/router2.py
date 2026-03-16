@@ -1,5 +1,6 @@
 from models.query2 import Query2
 from .autoreport import autoreport
+from .auto_plann import AutoPlann
 from .autoreport2 import AutoReport
 from fastapi import APIRouter,Depends, Query
 from typing import Optional
@@ -13,6 +14,7 @@ from reporting.schema2 import (
 query = Query2()
 auto= autoreport()
 auto1=AutoReport()
+auto2 = AutoPlann()
 router = APIRouter(prefix="/reporting", 
     tags=["Reporting"])
 @router.get("/advertiser/{adv}", summary="Rapport global d'un advertiser2",response_model=GlobalAdvertiserResponse)
@@ -50,4 +52,4 @@ async def get_report():
 
 @router.get("/test/")
 async def test():
-    return auto1.generate_reporting()
+    return auto2.run()
