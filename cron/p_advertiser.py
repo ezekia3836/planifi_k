@@ -2,14 +2,13 @@ import pandas as pd
 from config.ClickHouseConfig import ClickHouseConfig
 from models.Databases import Database
 from config.PgConfig import PgConfig
-from models.Tags_advertiser import TagsAdvertiser
-advertiser = TagsAdvertiser()
+
 class p_advertiser:
     BATCH_SIZE = 10_000
 
     def __init__(self):
         self.clk = ClickHouseConfig().getClient_prod()
-        self.db_model = TagsAdvertiser(client=self.clk)
+        #self.db_model = TagsAdvertiser(client=self.clk)
         self.pg = PgConfig().get_client()
         self.table_name='advertiser'
 

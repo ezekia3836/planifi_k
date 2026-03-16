@@ -4,15 +4,11 @@ from contextlib import asynccontextmanager
 from fastapi_cache import FastAPICache
 from fastapi_cache.backends.redis import RedisBackend
 from redis.asyncio import Redis 
-from reporting.router_reporting import router as reporting_router
-from reporting.router_global import router as router_global
 from reporting.router2 import router as router2
 from apscheduler.schedulers.background import BackgroundScheduler
-from models.Tags_advertiser import TagsAdvertiser
 from datetime import datetime
 from cron.Cron import Cron
 
-tgadv = TagsAdvertiser()
 origins = [
     "http://localhost",
     "http://localhost:3000",
@@ -46,6 +42,7 @@ def job_cron():
     #cron.start_act()
     #cron.start_tags()
     #cron.start_reporting2()
+    cron.start_report_final()
     print(f"[{datetime.now()}] Exécution du cron  {datetime.now() - start}")
 
 

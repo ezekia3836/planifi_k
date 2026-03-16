@@ -1,4 +1,6 @@
 from models.query2 import Query2
+from .autoreport import autoreport
+from .autoreport2 import AutoReport
 from fastapi import APIRouter,Depends, Query
 from typing import Optional
 from fastapi_cache.decorator import cache 
@@ -9,6 +11,8 @@ from reporting.schema2 import (
     BasesResponse
 )
 query = Query2()
+auto= autoreport()
+auto1=AutoReport()
 router = APIRouter(prefix="/reporting", 
     tags=["Reporting"])
 @router.get("/advertiser/{adv}", summary="Rapport global d'un advertiser2",response_model=GlobalAdvertiserResponse)
@@ -39,3 +43,11 @@ async def all_bases(
     tags: list[str] | None = Query(None)
 ):
     return query.all_bases(country=country,tags=tags,date_schedule=date_schedule,date_start=date_start,date_end=date_end)
+
+@router.get("/automa/")
+async def get_report():
+    return auto.generate_reporting()
+
+@router.get("/test/")
+async def test():
+    return auto1.generate_reporting()
