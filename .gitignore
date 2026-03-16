@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.env
+*.env
 app.env
 .venv/
 venv/
@@ -32,4 +34,3 @@ conf/
 !requirement.txt 
 brouillon/
 Tags/
-routers/
