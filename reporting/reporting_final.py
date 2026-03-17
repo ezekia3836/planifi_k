@@ -116,7 +116,7 @@ class reporting:
                 ) AS vd1
             ) AS idsendouts ON TRUE
             WHERE st.id = 5
-            GROUP BY pa.caeur, vd.id LIMIT 2
+            GROUP BY pa.caeur, vd.id
         """)
         pg_map = {}
         try:
@@ -262,7 +262,6 @@ class reporting:
         seen_openers:  set = set()
         seen_clickers: set = set()
         temp_rows = []
-
         print("Récupération events")
         for row in self.recupere_events(id_routers):
             focus_data = focus_map.get(str(row.get("id_routers")))
@@ -271,7 +270,6 @@ class reporting:
             row.update(focus_data)
             ev  = row.get("event_type")
             key = (row.get("adv_id"), row.get("id_routers"), row.get("dwh_id"))
-
             row["sends"]      = 1 if ev == "Sends"      else 0
             row["opens"]      = 1 if ev == "Opens"      else 0
             row["clicks"]     = 1 if ev == "Clicks"     else 0
@@ -282,9 +280,7 @@ class reporting:
             row["clickers"]   = 1 if ev == "Clicks" and key not in seen_clickers else 0
             if row["openers"]:  seen_openers.add(key)
             if row["clickers"]: seen_clickers.add(key)
-
             temp_rows.append(row)
-
             if len(temp_rows) >= batch_size_events:
                 start_time = time.time()
                 self._process_batch(temp_rows)
@@ -296,7 +292,6 @@ class reporting:
                     batch_size_events = min(50_000, int(batch_size_events * 1.2))
                 print(f"Batch traité en {elapsed:.1f}s, batch_size: {batch_size_events}")
                 temp_rows = []
-
         if temp_rows:
             self._process_batch(temp_rows)
 
@@ -305,10 +300,8 @@ class reporting:
         df = pd.DataFrame(rows_batch)
         if database_id is not None:
             df = df[df["database_id"] == database_id]
-
         if df.empty:
             return
-
         dwh_ids= df["database_id"].dropna().unique().tolist()
         contacts_map = self.resilient_call(self.recupere_contacts, dwh_ids)
         ages = df["dwh_id"].map(lambda x: contacts_map.get(str(x), {}).get("age", None))
@@ -316,8 +309,7 @@ class reporting:
             pd.cut(pd.to_numeric(ages, errors="coerce"),
                    bins=AGE_BINS, labels=AGE_LABELS, right=False)
             .astype(str)
-            .replace("nan", "O_age")
-        )
+            .replace("nan", "O_age"))
         df["gender"]         = df["dwh_id"].map(lambda x: contacts_map.get(str(x), {}).get("gender")   or "O_gender")
         df["main_isp"]       = df["dwh_id"].map(lambda x: contacts_map.get(str(x), {}).get("main_isp") or "O_isp")
         df["zipcode"]        = df["dwh_id"].map(lambda x: contacts_map.get(str(x), {}).get("zipcode")  or "zipcode_vide")

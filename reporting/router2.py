@@ -51,5 +51,6 @@ async def get_report():
     return auto.generate_reporting()
 
 @router.get("/test/")
+@cache(expire=60)
 async def test():
     return auto2.run()
