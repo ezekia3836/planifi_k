@@ -3,11 +3,11 @@ import pandas as pd
 from config.config import Config
 class ClickHouseConfig:
     def __init__(self):
-        self.host_loc = Config.CLICKHOUSE_LOCAL['host']
-        self.port_loc =  Config.CLICKHOUSE_LOCAL['port']
-        self.username_loc =  Config.CLICKHOUSE_LOCAL['username']
-        self.password_loc =  Config.CLICKHOUSE_LOCAL['password']
-        self.database_loc =  Config.CLICKHOUSE_LOCAL['database']
+        #self.host_loc = Config.CLICKHOUSE_LOCAL['host']
+        #self.port_loc =  Config.CLICKHOUSE_LOCAL['port']
+        #self.username_loc =  Config.CLICKHOUSE_LOCAL['username']
+        #self.password_loc =  Config.CLICKHOUSE_LOCAL['password']
+        #self.database_loc =  Config.CLICKHOUSE_LOCAL['database']
         #self.host = '34.159.21.189'
         #self.port = 8123
         #self.username = 'admin'
@@ -34,7 +34,7 @@ class ClickHouseConfig:
                 #"max_partitions_per_insert_block": 1000
             }
         )
-    def getClient_loc(self):
+    """def getClient_loc(self):
         return get_client(
             host=self.host_loc,
             port=self.port_loc,
@@ -47,7 +47,7 @@ class ClickHouseConfig:
                 "insert_quorum": 1,
                 #"max_partitions_per_insert_block": 1000
             }
-        )
+        )"""
 """client = ClickHouseConfig().getClient()
 
 df = pd.read_excel('databases.xlsx')

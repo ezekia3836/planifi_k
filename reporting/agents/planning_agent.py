@@ -37,8 +37,13 @@ class PlanningAgent:
                     "recommandation": [
                     {{
                         "base": "",
-                        "segment": "",
+                        "age": "",
+                        "gender":"",
+                        "isp":"",
                         "heure": "",
+                        "mois":"",
+                        "country":"",
+                        "currency":"",
                         "score": ""
                     }}
                     ]

@@ -28,17 +28,23 @@ class candidatAgent:
         return{
             "advertiser":row["adv_id"],
             "base":row["database_id"],
-            "segment":row["segment"],
+            "age":row["age"],
+            "gender":row["gender"],
+            "isp":row["isp"],
             "tag":row["tag"],
+            "mois":row["month"],
             "jour":self.days_maps[row["day"]],
             "heure":f"{int(row['hour']):02d}:00",
+            "country":row["country"],
+            "currency":row["currency"],
             "score":score
         }
+    
     
     def _select_best(self,candidats):
         best={}
         for c in candidats:
-            key=(c["advertiser"],c["segment"],c["jour"])
+            key=(c["advertiser"],c["age"],c["gender"],c["isp"],c["jour"])
             if key not in best or c["score"]>best[key]["score"]:
                 best[key]=c
         return list(best.values())

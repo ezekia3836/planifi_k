@@ -8,7 +8,7 @@ class Query2:
     def __init__(self):
         self.clk = ClickHouseConfig().getClient_prod()
         self.analyze = analyse()
-        self.table = "dev_reporting_agg"
+        self.table = "prod_reporting"
 
     def _execute_query(self, query,params=None):
         result = self.clk.query(query,parameters=params or {})
@@ -483,7 +483,7 @@ class Query2:
         }
         return result
     def all_advertisers(self,date_schedule=None,date_start=None,date_end=None,tags=None):
-        query=""" 
+        query=f""" 
         SELECT r.adv_id,
         a.name,SUM(r.sends) AS sends,
         SUM(r.openers) AS openers,
@@ -493,7 +493,7 @@ class Query2:
         round(SUM(r.openers)/NULLIF(SUM(r.sends),0)*100,3) AS taux_openers, 
         round(SUM(r.clickers)/NULLIF(SUM(r.sends),0)*100,3) AS taux_clickers,
         round(SUM(r.unsubs)/NULLIF(SUM(r.sends),0)*100,3) AS taux_unsubs
-        FROM dev_reporting_agg r JOIN advertiser a ON r.adv_id=a.id """
+        FROM {self.table} r JOIN advertiser a ON r.adv_id=a.id """
         joins=[]
         conditions=[]
         if tags:
@@ -527,7 +527,7 @@ class Query2:
                     "taux_clickers":row["taux_clickers"],
                     "taux_unsubs":row["taux_unsubs"],
                     "analyse":{
-                            "taux_clickers":self.analyze.analyze_click_rate(row['taux_clickers'] if row["clickers"] else 0.0),
+                            "taux_clickers":self.analyze.analyze_click_rate(row['taux_clickers'] if row["taux_clickers"] else 0.0),
                             "taux_cto":self.analyze.analyze_cto_rate(row["taux_cto"],row["openers"]),
                             "taux_unsubs": self.analyze.analyze_unsub_rate(row["taux_unsubs"] if row["taux_unsubs"] else 0.0)
                         }
@@ -536,7 +536,7 @@ class Query2:
         return result
     
     def all_bases(self,country=None,tags=None,date_schedule=None,date_start=None,date_end=None):
-        query=""" 
+        query=f""" 
         SELECT r.database_id,
         d.basename,
         SUM(r.sends) AS sends,
@@ -547,7 +547,7 @@ class Query2:
         round(SUM(r.clickers)/NULLIF(SUM(r.openers),0)*100,3) as taux_cto, 
         round(SUM(r.clickers)/NULLIF(SUM(r.sends),0)*100,3) AS taux_clickers,
         round(SUM(r.unsubs)/NULLIF(SUM(r.sends),0)*100,3) AS taux_unsubs
-        FROM dev_reporting_agg r JOIN databases d ON r.database_id=d.id """
+        FROM {self.table} r JOIN databases d ON r.database_id=d.id """
         joins=[]
         conditions=[]
         if tags:

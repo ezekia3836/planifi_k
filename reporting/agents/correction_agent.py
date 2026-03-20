@@ -10,6 +10,7 @@ class CorrectionAgent:
         self.model = "mistral-small-latest"
 
     def correct(self, schedule, error):
+        print(error)
         prompt = f"""
             Le planning contient une erreur : {error}
             Corrige-le sans violer les règles.
