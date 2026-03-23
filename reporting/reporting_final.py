@@ -46,9 +46,9 @@ class reporting:
         self.table = "prod_reporting"
         today = datetime.today()
         self.date_end = today.date()
-        self.date_start = (today - relativedelta(months=3)).date()
+        self.date_start = (today - relativedelta(months=1)).date()
         self.batch_adv_size = BATCH_ADV_SIZE
-        self.konticrea = connect_kit()
+        #self.konticrea = connect_kit()
 
     def resilient_call(self, func, *args, max_retry=5, sleep_sec=5, backoff=True, **kwargs):
         attempt, wait = 1, sleep_sec
@@ -102,7 +102,7 @@ class reporting:
                     ) AND vd2.idsendout IS NOT NULL
                 ) AS vd1
             ) AS idsendouts ON TRUE
-            WHERE st.id = 5 AND vd.date_shedule BETWEEN '{self.date_start}' AND '{self.date_end}'
+            WHERE st.id = 5 AND vd.date_shedule BETWEEN '2026-02-19' AND '2026-03-18'
             GROUP BY pa.caeur, vd.id
         """)
         pg_map = {}
@@ -338,9 +338,9 @@ class reporting:
         df["basename"]= df["database_id"].map(lambda x: db_map.get(str(x), {}).get("basename", "base_vide"))
         df["country"] = df["database_id"].map(lambda x: db_map.get(str(x), {}).get("country",  0))
         del db_map
-
         optimize_params = (df[["id_focus", "ktk_id"]].drop_duplicates().to_dict("records"))
         optimized_map = self.resilient_call(self.recuper_optimize, optimize_params)
+
         df["optimized"] = df.apply(
             lambda r: optimized_map.get(
                 (str(self.safe(r["id_focus"])),
