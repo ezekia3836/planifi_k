@@ -9,7 +9,7 @@ import pandas as pd
 class autoreport:
     def __init__(self):
         self.clk = conn().getClient_prod()
-        self.table= "dev_reporting_agg"
+        self.table= "prod_reporting"
         self.limit=5
         self.days_map = {1: "Lundi", 2: "Mardi", 3: "Mercredi", 4: "Jeudi", 5: "Vendredi", 6: "Samedi", 7: "Dimanche"}
     def _execute_query(self, query,params=None):
@@ -20,14 +20,14 @@ class autoreport:
         current_day = datetime.now().day
         current_month = datetime.now().month
         for adv_id in adv_ids:
-            query = """ 
+            query = f""" 
                 SELECT r.database_id, r.age_gender_isp AS segment, t.tag, r.country AS country, toDayOfWeek(parseDateTimeBestEffort(ds)) AS day,toMonth(parseDateTimeBestEffort(ds)) AS month,
                     toHour(r.date_event) AS hour,SUM(r.sends) AS sends,SUM(r.openers) AS openers,SUM(r.clickers) AS clickers,
-                    SUM(r.unsubs) AS unsubs FROM dev_reporting_agg r ARRAY JOIN r.date_schedule AS ds LEFT JOIN tags t ON r.tag_id = t.id
+                    SUM(r.unsubs) AS unsubs FROM {self.table} r ARRAY JOIN r.date_schedule AS ds LEFT JOIN tags t ON r.tag_id = t.id
                 WHERE r.adv_id = %(adv_id)s GROUP BY segment, tag, country, day, hour,database_id,month
             """
             rows = self._execute_query(query, params={"adv_id": adv_id})
-            df_by_month = [row for row in rows if row["month"]==current_month+7]
+            df_by_month = [row for row in rows if row["month"]==current_month]
             scored_data = []
             for r in df_by_month:
                 sends = r["sends"]

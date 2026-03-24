@@ -1,7 +1,6 @@
 from collections import defaultdict
 from config.ClickHouseConfig import ClickHouseConfig
 from reporting.analyze import analyse
-import base64
 import math
 import re
 class Query2:
@@ -29,6 +28,36 @@ class Query2:
         except Exception:
             return default
 
+    def clean_text(self,text, remove_emoji=False):
+        if not text:
+            return ""
+        try:
+            text = text.encode('latin1').decode('utf-8', errors='ignore')
+        except Exception:
+            pass
+        
+        #text = unidecode.unidecode(text)
+        if remove_emoji:
+            emoji_pattern = re.compile(
+                "["
+                "\U0001F600-\U0001F64F" 
+                "\U0001F300-\U0001F5FF"  
+                "\U0001F680-\U0001F6FF"  
+                "\U0001F1E0-\U0001F1FF"  
+                "\U00002700-\U000027BF"  
+                "\U0001F900-\U0001F9FF" 
+                "\U00002600-\U000026FF"  
+                "]+",
+                flags=re.UNICODE
+            )
+            text = emoji_pattern.sub(r'', text)
+        #text = re.sub(r'[^\x20-\x7E]+', ' ', text)
+        cleaned = re.sub(r"[^a-zA-Z0-9À-ÿ\s\.\,\!\?\%\-\']", "", text)
+        text = re.sub(r'[^\x20-\x7EÀ-ÿ]+', ' ', text)
+        text = ' '.join(text.split())
+
+        return cleaned
+
     def age_sort_key(self,age_range: str):
         if not age_range:
             return 9999
@@ -41,6 +70,7 @@ class Query2:
         if match_range:
             return int(match_range.group(1))
         return 9999
+    
     def global_advertiser(self, adv_id):
         query = f"""
             SELECT
@@ -49,8 +79,9 @@ class Query2:
                 tag_id,
                 age_range,
                 gender,
-                brand,
+                base64Decode(brand) AS brand,
                 optimized,
+                base64Decode(subject) AS subject,
                 main_isp,
                 date_schedule,
                 SUM(sends) AS sends,
@@ -66,7 +97,7 @@ class Query2:
             GROUP BY
                 database_id, id_routers, tag_id,
                 age_range, gender, main_isp,
-                brand, optimized, date_schedule
+                brand, optimized, date_schedule,subject
         """
 
         rows = self._execute_query(query, {"adv_id": adv_id})
@@ -74,18 +105,10 @@ class Query2:
             return {"advertiser_id": str(adv_id), "globales": {}, "bases": []}
 
         bases = {}
-        decoded_brands = {}
         base_ca = {}   
         router_ca = {} 
 
         total = dict(sends=0, clicks=0, clickers=0, opens=0, openers=0, unsubs=0, ca=0)
-
-        def decode_brand(b):
-            if not b:
-                return ""
-            if b not in decoded_brands:
-                decoded_brands[b] = base64.b64decode(b).decode().strip()
-            return decoded_brands[b]
 
 
         for r in rows:
@@ -93,6 +116,7 @@ class Query2:
             base = bases.setdefault(base_key, {
                 "database_id": r["database_id"],
                 "id_routers": r["id_routers"],
+                "subject":r["subject"],
                 "tag_id": r["tag_id"],
                 "sends": 0, "clicks": 0, "clickers": 0,
                 "opens": 0, "openers": 0, "unsubs": 0,
@@ -110,7 +134,6 @@ class Query2:
             unsubs = r["unsubs"] or 0
             ca = r["ca"] or 0
 
-            # addition des métriques classiques
             base["sends"] += sends
             base["clicks"] += clicks
             base["clickers"] += clickers
@@ -118,20 +141,14 @@ class Query2:
             base["openers"] += openers
             base["unsubs"] += unsubs
 
-            # stocker le CA unique par router
             router_key = r["id_routers"]
             router_ca[router_key] = max(router_ca.get(router_key, 0), ca)
-
-            # stocker le CA unique par base
             base_ca[base_key] = max(base_ca.get(base_key, 0), ca)
 
-            # date_schedule et segments
             if r.get("date_schedule"):
                 base["date_schedule"].update(r["date_schedule"] if isinstance(r["date_schedule"], list) else [r["date_schedule"]])
             if r.get("segmentId"):
                 base["SegmentIds"].update(r["segmentId"])
-
-            # dimensions
             def push_dim(dim, value):
                 if not value:
                     return
@@ -150,8 +167,7 @@ class Query2:
             push_dim("gender", r["gender"])
             push_dim("isp", r["main_isp"])
 
-            # brands
-            brand_name = decode_brand(r["brand"])
+            brand_name = self.clean_text(r["brand"])
             optimized = r.get("optimized") or ""
             brand_list = base["brands"]
             brand = next((b for b in brand_list if b["name"] == brand_name), None)
@@ -172,8 +188,6 @@ class Query2:
             brand["openers"] += openers
             brand["unsubs"] += unsubs
             brand["ca"] += ca
-
-            # totals (hors CA)
             total["sends"] += sends
             total["clicks"] += clicks
             total["clickers"] += clickers
@@ -232,6 +246,7 @@ class Query2:
             result_bases.append({
                 "database_id": base["database_id"],
                 "id_routers": base["id_routers"],
+                "subject": self.clean_text(base["subject"]),
                 "tag_id": base["tag_id"],
                 "brands": base["brands"],
                 "sends": base["sends"],
@@ -277,11 +292,12 @@ class Query2:
             },
             "bases": sorted(result_bases, key=lambda x: (x["clickers"], x["ecpm"]), reverse=True)
         }
+    
     def global_base(self, db_id):
         query = f"""
             SELECT
                 adv_id, id_routers, tag_id, age_range, gender, main_isp,
-                brand, optimized,
+                base64Decode(brand) AS brand, optimized,
                 SUM(sends) AS sends,
                 SUM(clicks) AS clicks,
                 SUM(clickers) AS clickers,
@@ -307,12 +323,6 @@ class Query2:
         ca_per_routers = {} 
         decoded_brands = {}
 
-        def decode_brand(b):
-            if not b:
-                return ""
-            if b not in decoded_brands:
-                decoded_brands[b] = base64.b64decode(b).decode("utf-8").strip()
-            return decoded_brands[b]
 
         def compute_rates(sends, openers, clickers, unsubs):
             return (
@@ -377,7 +387,7 @@ class Query2:
                 seg["opens"] += opens
                 seg["openers"] += openers
                 seg["unsubs"] += unsubs
-            brand_name = decode_brand(r["brand"])
+            brand_name = self.clean_text((r["brand"]))
             optimized_url = r.get("optimized") or "O_opt"
             brand = adv["brands_map"].get(brand_name)
             if not brand:
@@ -464,6 +474,7 @@ class Query2:
         }
 
         return result
+    
     def all_advertisers(self, date_schedule=None, date_start=None, date_end=None, tags=None):
         joins = []
         conditions = []
@@ -561,7 +572,7 @@ class Query2:
             })
 
         return result
-    
+   
     def all_bases(self, country=None, tags=None, date_schedule=None, date_start=None, date_end=None):
         joins = []
         conditions = []

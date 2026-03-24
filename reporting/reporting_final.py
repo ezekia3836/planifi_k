@@ -7,6 +7,7 @@ from sqlalchemy import text
 import pandas as pd
 import numpy as np
 from dateutil.relativedelta import relativedelta
+import logging
 
 BATCH_ADV_SIZE = 50
 BATCH_CONTACTS = 2_000
@@ -39,6 +40,12 @@ STR_COLS = [
     "id_routers", "age_range", "gender", "main_isp",
     "optimized", "subject", "zipcode", "dep",
 ]
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("reporting")
 class reporting:
     def __init__(self):
         self.clk = ClickHouseConfig().getClient_prod()
@@ -46,9 +53,11 @@ class reporting:
         self.table = "prod_reporting"
         today = datetime.today()
         self.date_end = today.date()
-        self.date_start = (today - relativedelta(months=1)).date()
+        self.date_start = (today - relativedelta(months=3)).date()
         self.batch_adv_size = BATCH_ADV_SIZE
-        #self.konticrea = connect_kit()
+        self.konticrea = connect_kit()
+        self.seen_openers= set()
+        self.seen_clickers =set()
 
     def resilient_call(self, func, *args, max_retry=5, sleep_sec=5, backoff=True, **kwargs):
         attempt, wait = 1, sleep_sec
@@ -66,9 +75,10 @@ class reporting:
                 attempt += 1
 
     def notifier_info(self, message):   
-        print(f"Succès : {message}")
+        logger.info(message)
+    
     def notifier_erreur(self, message): 
-        print(f"Erreur : {message}")
+        logger.error(message)
 
     def safe(self, value):
         try:
@@ -102,7 +112,7 @@ class reporting:
                     ) AND vd2.idsendout IS NOT NULL
                 ) AS vd1
             ) AS idsendouts ON TRUE
-            WHERE st.id = 5 AND vd.date_shedule BETWEEN '2026-02-19' AND '2026-03-18'
+            WHERE st.id = 5 AND vd.date_shedule BETWEEN '{self.date_start}' AND '{self.date_end}'
             GROUP BY pa.caeur, vd.id
         """)
         pg_map = {}
@@ -254,12 +264,12 @@ class reporting:
         return optimized_map
     
     def report(self):
+        self.seen_openers.clear()
+        self.seen_clickers.clear()
         print("Récupération Focus")
         focus_map = self.recupere_pg()
         id_routers = list(focus_map.keys())
         batch_size_events = 10_000
-        seen_openers = set()
-        seen_clickers = set()
         temp_rows = []
         print("Récupération events")
         for row in self.recupere_events(id_routers):
@@ -275,10 +285,10 @@ class reporting:
             row["unsubs"]  = 1 if ev == "Removals" else 0
             row["complaints"] = 1 if ev == "Complaints" else 0
             row["bounces"] = 1 if ev == "Bounces" else 0
-            row["openers"] = 1 if ev == "Opens" and key not in seen_openers  else 0
-            row["clickers"] = 1 if ev == "Clicks" and key not in seen_clickers else 0
-            if row["openers"]:  seen_openers.add(key)
-            if row["clickers"]: seen_clickers.add(key)
+            row["openers"] = 1 if ev == "Opens" and key not in self.seen_openers  else 0
+            row["clickers"] = 1 if ev == "Clicks" and key not in self.seen_clickers else 0
+            if row["openers"]:  self.seen_openers.add(key)
+            if row["clickers"]: self.seen_clickers.add(key)
             temp_rows.append(row)
             if len(temp_rows) >= batch_size_events:
                 start_time = time.time()
@@ -317,59 +327,101 @@ class reporting:
             df = df[df["database_id"] == database_id]
         if df.empty:
             return
-        dwh_ids = df["dwh_id"].dropna().unique().tolist()
+        dwh_ids = df["dwh_id"].dropna().astype(str).unique().tolist()
         contacts_map = self.resilient_call(self.recupere_contacts, dwh_ids)
-        ages = df["dwh_id"].map(lambda x: contacts_map.get(str(x), {}).get("age", None))
-        df["age_range"] = (
-            pd.cut(pd.to_numeric(ages, errors="coerce"),
-                   bins=AGE_BINS, labels=AGE_LABELS, right=False).astype(str).replace("nan", "O_age"))
-        df["gender"]= df["dwh_id"].map(lambda x: contacts_map.get(str(x), {}).get("gender")   or "O_gender")
-        df["gender"]=df["gender"].replace({"O":"O_gender"})
-        df["main_isp"]= df["dwh_id"].map(lambda x: contacts_map.get(str(x), {}).get("main_isp") or "O_isp")
-        df["main_isp"]=df["main_isp"].replace({"Other":"O_isp"})
-        df["zipcode"] = df["dwh_id"].map(lambda x: contacts_map.get(str(x), {}).get("zipcode")  or "zipcode_vide")
-        df["dep"] = df["dwh_id"].map(lambda x: contacts_map.get(str(x), {}).get("dep")      or "dep_vide")
-        df["age_gender_isp"] = df["age_range"] + "_" + df["gender"] + "_" + df["main_isp"]
-        del contacts_map
+        contacts_df = pd.DataFrame.from_dict(contacts_map, orient="index")
+        if not contacts_df.empty:
+            contacts_df.index.name = "dwh_id"
+            contacts_df.reset_index(inplace=True)
+            df["dwh_id"] = df["dwh_id"].astype(str)
+            df = df.merge(contacts_df, on="dwh_id", how="left")
+        df["age_range"] = pd.cut(
+            pd.to_numeric(df.get("age"), errors="coerce"),
+            bins=AGE_BINS, labels=AGE_LABELS, right=False
+        ).astype(str).replace("nan", "O_age")
+        df["gender"] = df.get("gender").fillna("O_gender").replace({"O": "O_gender"})
+        df["main_isp"] = df.get("main_isp").fillna("O_isp").replace({"Other": "O_isp"})
+        df["zipcode"] = df.get("zipcode").fillna("zipcode_vide")
+        df["dep"] = df.get("dep").fillna("dep_vide")
+        df["age_gender_isp"] = (
+            df["age_range"].astype(str) + "_" +
+            df["gender"].astype(str) + "_" +
+            df["main_isp"].astype(str))
+        del contacts_df, contacts_map
 
         database_ids = df["database_id"].dropna().unique().tolist()
         db_map = self.resilient_call(self.recupere_ktk_id, database_ids)
-        df["ktk_id"]  = df["database_id"].map(lambda x: db_map.get(str(x), {}).get("ktk_id",   "ktk_vide"))
-        df["basename"]= df["database_id"].map(lambda x: db_map.get(str(x), {}).get("basename", "base_vide"))
-        df["country"] = df["database_id"].map(lambda x: db_map.get(str(x), {}).get("country",  0))
-        del db_map
-        optimize_params = (df[["id_focus", "ktk_id"]].drop_duplicates().to_dict("records"))
-        optimized_map = self.resilient_call(self.recuper_optimize, optimize_params)
+        db_df = pd.DataFrame.from_dict(db_map, orient="index")
+        if not db_df.empty:
+            db_df.index.name = "database_id"
+            db_df.reset_index(inplace=True)
+            df["database_id"] = pd.to_numeric(df["database_id"], errors="coerce")
+            db_df["database_id"] = pd.to_numeric(db_df["database_id"], errors="coerce")
+            df = df.merge(db_df, on="database_id", how="left")
+        df["ktk_id"] = df["ktk_id"].fillna("ktk_vide")
+        df["basename"] = df["basename"].fillna("base_vide")
+        df["country"] = df["country"].fillna(0)
+        del db_df, db_map
 
-        df["optimized"] = df.apply(
-            lambda r: optimized_map.get(
-                (str(self.safe(r["id_focus"])),
-                 str(self.safe(r["ktk_id"]))),
-                "optimize_vide",
-            ), axis=1,
-        )
-        del optimized_map
+        optimize_params = df[["id_focus", "ktk_id"]].drop_duplicates()
+        optimized_map = self.resilient_call(
+            self.recuper_optimize,
+            optimize_params.to_dict("records"))
+        opt_df = pd.DataFrame(
+            [(k[0], k[1], v) for k, v in optimized_map.items()],
+            columns=["id_focus", "ktk_id", "optimized"])
+        df["id_focus"] = df["id_focus"].astype(str)
+        df["ktk_id"] = df["ktk_id"].astype(str)
+        if opt_df.empty:
+            df["optimized"] = "optimized_vide"
+        else:
+            df = df.merge(opt_df, on=["id_focus", "ktk_id"], how="left")
+            df["optimized"] = df["optimized"].fillna("optimized_vide")
+        del opt_df, optimized_map
 
+        if "date_schedule" not in df.columns:
+            df["date_schedule"] = [[] for _ in range(len(df))]
+        df["date_event"] = pd.to_datetime(df["date_event"], errors="coerce")
         df_grouped = df.groupby(GROUP_COLS, observed=True).agg(
-            sends = ("sends", "sum"),
-            opens = ("opens",  "sum"),
-            openers = ("openers", "max"),
-            clicks = ("clicks", "sum"),
-            clickers = ("clickers", "max"),
-            unsubs = ("unsubs", "sum"),
-            complaints = ("complaints", "sum"),
-            bounces = ("bounces", "sum"),
-            ca = ("ca", "max"),
-            dwh_id = ("dwh_id","first"),  
-            date_schedule = ("date_schedule",lambda x: sorted({d for sub in x if isinstance(sub, list) for d in sub})),).reset_index()
-        del df
+            sends=("sends", "sum"),
+            opens=("opens", "sum"),
+            openers=("openers", "max"),      
+            clicks=("clicks", "sum"),
+            clickers=("clickers", "max"),   
+            unsubs=("unsubs", "sum"),
+            complaints=("complaints", "sum"),
+            bounces=("bounces", "sum"),
+            ca=("ca", "max"),
+            dwh_id=("dwh_id", "first"),
+            date_schedule=("date_schedule", lambda x: sorted({
+                d for sub in x if isinstance(sub, list) for d in sub
+            })),
+        ).reset_index()
 
-        df_grouped["date_schedule_max"] = df_grouped["date_schedule"].apply(lambda dates: max((dt for dt in (pd.to_datetime(d, errors='coerce') for d in dates or []) if pd.notna(dt)),default=pd.NaT))
-        df_grouped["date_schedule_max"] = pd.to_datetime(df_grouped["date_schedule_max"]).dt.date
+        if len(self.seen_openers) > 1_000_000:
+            logger.warning(f"seen_openers too large: {len(self.seen_openers)} → reset")
+            self.seen_openers.clear()
+            self.seen_clickers.clear()
+
+        df_grouped["date_schedule_max"] = (
+            df_grouped["date_schedule"]
+            .explode()
+            .pipe(pd.to_datetime, errors="coerce")
+            .groupby(level=0)
+            .max()
+            .dt.date
+        )
+        df_grouped["date_schedule_max"] = df_grouped["date_schedule_max"].dt.date
         df_grouped["updated_at"] = datetime.now()
         df_grouped = df_grouped[COLUMNS_FINAL]
+
         for col in INT_COLS:
-            df_grouped[col] = pd.to_numeric(df_grouped[col], errors="coerce").fillna(0).astype(np.uint32)
+            df_grouped[col] = (
+                pd.to_numeric(df_grouped[col], errors="coerce")
+                .fillna(0)
+                .clip(lower=0)  
+                .astype(np.uint32)
+            )
         for col in STR_COLS:
             df_grouped[col] = df_grouped[col].astype("string").fillna("")
         df_grouped["dwh_id"] = df_grouped["dwh_id"].astype("string")
@@ -377,8 +429,11 @@ class reporting:
         df_grouped["subject"] = df_grouped["subject"].fillna("O_objet")
         df_grouped["updated_at"] = pd.to_datetime(df_grouped["updated_at"])
         df_grouped["date_event"] = pd.to_datetime(df_grouped["date_event"]).fillna(datetime.now())
-        total=len(df_grouped)
+        total = len(df_grouped)
         for start in range(0, total, BATCH_INSERT):
-            self.clk.insert_df(self.table, df_grouped.iloc[start:start + BATCH_INSERT])
-        print(f"Données insérées : {total} lignes")
-        del df_grouped
+            self.clk.insert_df(
+                self.table,
+                df_grouped.iloc[start:start + BATCH_INSERT])
+        logger.info(f"Données insérées : {total} lignes")
+
+        del df, df_grouped

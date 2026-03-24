@@ -43,6 +43,7 @@ class BrandItem(BaseModel):
 class BaseItem(BaseModel):
     database_id: int
     id_routers: str
+    subject:str
     tag_id: int
     brands: List[BrandItem]
     sends: int

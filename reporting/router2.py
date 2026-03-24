@@ -13,11 +13,11 @@ from reporting.schema2 import (
 )
 query = Query2()
 auto= autoreport()
-auto1=AutoReport()
+#auto1=AutoReport()
 auto2 = AutoPlann()
 router = APIRouter(prefix="/reporting", 
     tags=["Reporting"])
-@router.get("/advertiser/{adv}", summary="Rapport global d'un advertiser2",response_model=GlobalAdvertiserResponse)
+@router.get("/advertiser/{adv}", summary="Rapport global d'un advertiser",response_model=GlobalAdvertiserResponse)
 @cache(expire=60)
 async def get_report_advertiser(adv: int):
     return query.global_advertiser(adv)
