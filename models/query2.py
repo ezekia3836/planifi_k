@@ -82,6 +82,7 @@ class Query2:
                 base64Decode(brand) AS brand,
                 optimized,
                 base64Decode(subject) AS subject,
+                dep AS departement,
                 main_isp,
                 date_schedule,
                 SUM(sends) AS sends,
@@ -97,7 +98,7 @@ class Query2:
             GROUP BY
                 database_id, id_routers, tag_id,
                 age_range, gender, main_isp,
-                brand, optimized, date_schedule,subject
+                brand, optimized, date_schedule, subject, dep
         """
 
         rows = self._execute_query(query, {"adv_id": adv_id})
@@ -107,20 +108,19 @@ class Query2:
         bases = {}
         base_ca = {}   
         router_ca = {} 
-
         total = dict(sends=0, clicks=0, clickers=0, opens=0, openers=0, unsubs=0, ca=0)
 
+        analyse_dep = {}
 
         for r in rows:
             base_key = (r["database_id"], r["id_routers"], r["tag_id"])
             base = bases.setdefault(base_key, {
                 "database_id": r["database_id"],
                 "id_routers": r["id_routers"],
-                "subject":r["subject"],
+                "subject": r["subject"],
                 "tag_id": r["tag_id"],
                 "sends": 0, "clicks": 0, "clickers": 0,
                 "opens": 0, "openers": 0, "unsubs": 0,
-                "date_schedule": set(),
                 "SegmentIds": set(),
                 "brands": [],
                 "dimensions": {"age_range": {}, "gender": {}, "isp": {}}
@@ -145,10 +145,6 @@ class Query2:
             router_ca[router_key] = max(router_ca.get(router_key, 0), ca)
             base_ca[base_key] = max(base_ca.get(base_key, 0), ca)
 
-            if r.get("date_schedule"):
-                base["date_schedule"].update(r["date_schedule"] if isinstance(r["date_schedule"], list) else [r["date_schedule"]])
-            if r.get("segmentId"):
-                base["SegmentIds"].update(r["segmentId"])
             def push_dim(dim, value):
                 if not value:
                     return
@@ -167,9 +163,20 @@ class Query2:
             push_dim("gender", r["gender"])
             push_dim("isp", r["main_isp"])
 
+            dep = r.get("departement") or "others"
+            if dep=='dep_vide':
+                dep="others"
+            dep_stat = analyse_dep.setdefault(dep, {"clickers": 0, "openers": 0, "sends": 0,"unsubs":0})
+            dep_stat["clickers"] += clickers
+            dep_stat["openers"] += openers
+            dep_stat["sends"] += sends
+            dep_stat["unsubs"] +=unsubs
+
             brand_name = self.clean_text(r["brand"])
             optimized = r.get("optimized") or ""
             brand_list = base["brands"]
+            segment_id = r.get("segmentId", [None])[0] if r.get("segmentId") else None
+            date_schedule = r.get("date_schedule")
             brand = next((b for b in brand_list if b["name"] == brand_name), None)
             if not brand:
                 brand = {
@@ -177,7 +184,10 @@ class Query2:
                     "creativities": optimized,
                     "sends": 0, "clicks": 0, "clickers": 0,
                     "opens": 0, "openers": 0, "unsubs": 0,
-                    "ca": 0
+                    "subject": self.clean_text(r["subject"]), 
+                    "segment_id": segment_id,
+                    "date_schedule":date_schedule
+
                 }
                 brand_list.append(brand)
 
@@ -187,7 +197,7 @@ class Query2:
             brand["opens"] += opens
             brand["openers"] += openers
             brand["unsubs"] += unsubs
-            brand["ca"] += ca
+
             total["sends"] += sends
             total["clicks"] += clicks
             total["clickers"] += clickers
@@ -197,7 +207,6 @@ class Query2:
 
         for key, b in bases.items():
             b["ca"] = base_ca.get(key, 0)
-
         total["ca"] = sum(router_ca.values())
 
         def compute_rates(sends, openers, clickers, unsubs):
@@ -207,6 +216,14 @@ class Query2:
                 round(unsubs / sends * 100, 3) if sends else 0,
                 round(clickers / openers * 100, 3) if openers else 0
             )
+        total_sends = total["sends"]  
+        for dep, stats in analyse_dep.items():
+            stats["taux_clickers"] = round(stats.get("clickers", 0) / total_sends * 100, 3) if total_sends else 0
+            stats["taux_openers"] = round(stats.get("openers", 0) / total_sends * 100, 3) if total_sends else 0
+            stats["taux_unsubs"] = round(stats.get("unsubs", 0) / total_sends * 100, 3) if total_sends else 0
+
+            if "sends" in stats:
+                del stats["sends"]
 
         result_bases = []
         for base in bases.values():
@@ -228,25 +245,9 @@ class Query2:
                     }
                 })
 
-            for dim in base["dimensions"].values():
-                for seg in dim.values():
-                    tc_d, to_d, tu_d, cto_d = compute_rates(seg["sends"], seg["openers"], seg["clickers"], seg["unsubs"])
-                    seg.update({
-                        "taux_clickers": tc_d,
-                        "taux_openers": to_d,
-                        "taux_unsubs": tu_d,
-                        "taux_cto": cto_d,
-                        "analyses": {
-                            "taux_clickers": self.analyze.analyze_click_rate(tc_d),
-                            "taux_cto": self.analyze.analyze_cto_rate(cto_d, seg["openers"]),
-                            "taux_unsubs": self.analyze.analyze_unsub_rate(tu_d)
-                        }
-                    })
-
             result_bases.append({
                 "database_id": base["database_id"],
                 "id_routers": base["id_routers"],
-                "subject": self.clean_text(base["subject"]),
                 "tag_id": base["tag_id"],
                 "brands": base["brands"],
                 "sends": base["sends"],
@@ -259,8 +260,6 @@ class Query2:
                 "taux_openers": to,
                 "taux_unsubs": tu,
                 "taux_cto": cto,
-                "date_schedule": sorted(base["date_schedule"]),
-                "SegmentIds": sorted(base["SegmentIds"]),
                 "ecpm": ecpm,
                 "ca": base["ca"],
                 "classification": classification,
@@ -288,41 +287,45 @@ class Query2:
                     "taux_clickers": self.analyze.analyze_click_rate(tc_g),
                     "taux_cto": self.analyze.analyze_cto_rate(cto_g, total["openers"]),
                     "taux_unsubs": self.analyze.analyze_unsub_rate(tu_g)
-                }
+                },
+                "analyse_dep": analyse_dep
             },
             "bases": sorted(result_bases, key=lambda x: (x["clickers"], x["ecpm"]), reverse=True)
         }
-    
+        
     def global_base(self, db_id):
         query = f"""
             SELECT
                 adv_id, id_routers, tag_id, age_range, gender, main_isp,
                 base64Decode(brand) AS brand, optimized,
+                base64Decode(subject) AS subject,
+                dep AS departement,
+                date_schedule,
                 SUM(sends) AS sends,
                 SUM(clicks) AS clicks,
                 SUM(clickers) AS clickers,
                 SUM(opens) AS opens,
                 SUM(openers) AS openers,
                 SUM(unsubs) AS unsubs,
-                MAX(ca) AS ca
+                MAX(ca) AS ca,
+                groupUniqArray(segmentId) AS segmentId
             FROM {self.table}
             WHERE database_id = %(db_id)s
             GROUP BY adv_id, id_routers, tag_id, age_range, gender,
-                    main_isp, brand, optimized
+                    main_isp, brand, optimized, subject, dep,date_schedule
         """
         rows = self._execute_query(query, {"db_id": db_id})
 
         result = {
             "database_id": str(db_id),
             "globales": {"sends": 0, "clicks": 0, "clickers": 0,
-                        "opens": 0, "openers": 0, "unsubs": 0, "ca": 0.0},
+                        "opens": 0, "openers": 0, "unsubs": 0, "ca": 0.0,
+                        "analyse_dep": {}},
             "advertisers": []
         }
 
         advertisers = {}
-        ca_per_routers = {} 
-        decoded_brands = {}
-
+        ca_per_routers = {}
 
         def compute_rates(sends, openers, clickers, unsubs):
             return (
@@ -342,6 +345,9 @@ class Query2:
             openers = r["openers"] or 0
             unsubs = r["unsubs"] or 0
             ca = r["ca"] or 0
+            dep = r.get("departement") or "others"
+            if dep=='dep_vide':
+                dep="others"
 
             ca_per_routers[(adv_id, id_routers)] = max(ca_per_routers.get((adv_id, id_routers), 0), ca)
             g = result["globales"]
@@ -351,10 +357,15 @@ class Query2:
             g["opens"] += opens
             g["openers"] += openers
             g["unsubs"] += unsubs
+            dep_stats = g["analyse_dep"].setdefault(dep, {"clickers": 0, "openers": 0, "sends": 0,"unsubs":0})
+            dep_stats["clickers"] += clickers
+            dep_stats["openers"] += openers
+            dep_stats["sends"] += sends
+            dep_stats["unsubs"]+=unsubs
+
             adv = advertisers.setdefault(adv_id, {
                 "advertiser_id": adv_id,
                 "id_routers_list": set(),
-                "tag": r["tag_id"],
                 "brands_map": {},
                 "brands": [],
                 "sends": 0, "clicks": 0, "clickers": 0,
@@ -387,13 +398,21 @@ class Query2:
                 seg["opens"] += opens
                 seg["openers"] += openers
                 seg["unsubs"] += unsubs
-            brand_name = self.clean_text((r["brand"]))
-            optimized_url = r.get("optimized") or "O_opt"
+
+            brand_name = self.clean_text(r["brand"])
+            segment_id = r.get("segmentId", [None])[0] if r.get("segmentId") else None
+            
+            optimized_url = r.get("optimized") or ""
+            subject = self.clean_text(r["subject"]) or ""
+            date_schedule = r.get("date_schedule")
             brand = adv["brands_map"].get(brand_name)
             if not brand:
                 brand = {
                     "name": brand_name,
                     "creativities": optimized_url,
+                    "subject": subject,
+                    "segment_id":segment_id,
+                    "date_schedule":date_schedule,
                     "sends": 0, "clicks": 0, "clickers": 0,
                     "opens": 0, "openers": 0, "unsubs": 0,
                     "ca": 0
@@ -409,6 +428,8 @@ class Query2:
             brand["unsubs"] += unsubs
             brand["ca"] += ca
             brand["creativities"] = optimized_url
+            brand["subject"] = subject
+
         for adv_id, adv in advertisers.items():
             adv["ca"] = sum(ca_per_routers[(adv_id, r)] for r in adv["id_routers_list"])
             result["globales"]["ca"] += adv["ca"]
@@ -428,6 +449,7 @@ class Query2:
                 "taux_cto": self.analyze.analyze_cto_rate(cto, adv["openers"]),
                 "taux_unsubs": self.analyze.analyze_unsub_rate(tu)
             }
+
             for dim in adv["dimensions"].values():
                 for seg in dim.values():
                     tc_d, to_d, tu_d, cto_d = compute_rates(seg["sends"], seg["openers"], seg["clickers"], seg["unsubs"])
@@ -459,7 +481,6 @@ class Query2:
             adv.pop("brands_map")
             result["advertisers"].append(adv)
 
-        result["advertisers"].sort(key=lambda x: x["ecpm"], reverse=True)
         g = result["globales"]
         tc, to, tu, cto = compute_rates(g["sends"], g["openers"], g["clickers"], g["unsubs"])
         g["ecpm"] = round((g["ca"] / g["sends"]) * 1000, 3) if g["sends"] else 0
@@ -472,6 +493,11 @@ class Query2:
             "taux_cto": self.analyze.analyze_cto_rate(cto, g["openers"]),
             "taux_unsubs": self.analyze.analyze_unsub_rate(tu)
         }
+        total_sends = g["sends"] 
+        for dep, stats in g["analyse_dep"].items():
+            stats["taux_clickers"] = round(stats["clickers"] / total_sends * 100, 3) if total_sends else 0
+            stats["taux_openers"] = round(stats["openers"] / total_sends * 100, 3) if total_sends else 0
+            stats["taux_unsubs"] = round(stats.get("unsubs", 0) / total_sends * 100, 3) if total_sends else 0
 
         return result
     

@@ -29,6 +29,9 @@ class Dimensions(BaseModel):
 class BrandItem(BaseModel):
     name:str
     creativities:str
+    subject:str
+    segment_id:int
+    date_schedule: List[date]
     sends: int=0
     clicks:int=0
     clickers: int=0
@@ -39,11 +42,11 @@ class BrandItem(BaseModel):
     taux_cto: float=0.0
     taux_unsubs: float=0.0
     analyses:Analyses={}
+    
 
 class BaseItem(BaseModel):
     database_id: int
     id_routers: str
-    subject:str
     tag_id: int
     brands: List[BrandItem]
     sends: int
@@ -59,12 +62,13 @@ class BaseItem(BaseModel):
     ca: float=0.0
     ecpm: float=0.0
     classification:str
-    date_schedule: List[date]
-    SegmentIds: List[int]
     analyses: Analyses={}
     dimensions: Dimensions={}
-   
 
+class DepStatsModel(BaseModel):
+    taux_clickers: Optional[float] = None
+    taux_openers: Optional[float] = None
+    taux_unsubs: Optional[float] = None
 class GlobalAdvertiserStats(BaseModel):
     sends: int=0
     clicks:int=0
@@ -79,6 +83,8 @@ class GlobalAdvertiserStats(BaseModel):
     taux_unsubs: float=0.0
     taux_cto: float=0.0
     analyses:Analyses={}
+    analyse_dep: Dict[str, DepStatsModel]
+
 
 class GlobalAdvertiserResponse(BaseModel):
     advertiser_id:str
@@ -100,6 +106,7 @@ class GobalBaseStats(BaseModel):
     taux_cto:float=0.0
     taux_unsubs:float=0.0
     analyses:Analyses={}
+    analyse_dep: Dict[str, DepStatsModel]
 
 class AdvertiserItem(BaseModel):
     advertiser_id:str
