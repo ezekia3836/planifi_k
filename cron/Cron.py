@@ -1,6 +1,7 @@
 from cron.p_contact import p_contact
 from cron.p_activity import p_activity
 from cron.p_advertiser import p_advertiser
+from cron.p_segment import p_segment
 from reporting.reporting_final import reporting as final
 import requests
 import pandas as pd
@@ -24,14 +25,18 @@ class Cron():
         except Exception as e:
             print('error at cron activities', e)
             pass
-
     def start_advertiser(self):
         try:
             cron = p_advertiser()
             cron.start_advertiser()
         except Exception as e:
             print("erreur",e)
-
+    def start_segment(self):
+        try:
+            cron = p_segment()
+            cron.run()
+        except Exception as e:
+            print("[Erreur] cron segment:",e)
     def start_report_final(self):
         try:
             cron=final()

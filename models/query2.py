@@ -2,7 +2,10 @@ from collections import defaultdict
 from config.ClickHouseConfig import ClickHouseConfig
 from reporting.analyze import analyse
 import math
+import pandas as pd
+import os
 import re
+CSV_DIR="C:/Users/DEV-014/Desktop/PLANIFI_K/csv_segments"
 class Query2:
     def __init__(self):
         self.clk = ClickHouseConfig().getClient_prod()
@@ -27,37 +30,6 @@ class Query2:
             return int(value or default)
         except Exception:
             return default
-
-    def clean_text(self,text, remove_emoji=False):
-        if not text:
-            return ""
-        try:
-            text = text.encode('latin1').decode('utf-8', errors='ignore')
-        except Exception:
-            pass
-        
-        #text = unidecode.unidecode(text)
-        if remove_emoji:
-            emoji_pattern = re.compile(
-                "["
-                "\U0001F600-\U0001F64F" 
-                "\U0001F300-\U0001F5FF"  
-                "\U0001F680-\U0001F6FF"  
-                "\U0001F1E0-\U0001F1FF"  
-                "\U00002700-\U000027BF"  
-                "\U0001F900-\U0001F9FF" 
-                "\U00002600-\U000026FF"  
-                "]+",
-                flags=re.UNICODE
-            )
-            text = emoji_pattern.sub(r'', text)
-        #text = re.sub(r'[^\x20-\x7E]+', ' ', text)
-        cleaned = re.sub(r"[^a-zA-Z0-9À-ÿ\s\.\,\!\?\%\-\']", "", text)
-        text = re.sub(r'[^\x20-\x7EÀ-ÿ]+', ' ', text)
-        text = ' '.join(text.split())
-
-        return cleaned
-
     def age_sort_key(self,age_range: str):
         if not age_range:
             return 9999
@@ -79,9 +51,9 @@ class Query2:
                 tag_id,
                 age_range,
                 gender,
-                base64Decode(brand) AS brand,
+                brand,
                 optimized,
-                base64Decode(subject) AS subject,
+                subject,
                 dep AS departement,
                 main_isp,
                 date_schedule,
@@ -173,7 +145,7 @@ class Query2:
             dep_stat["sends"] += sends
             dep_stat["unsubs"] +=unsubs
 
-            brand_name = self.clean_text(r["brand"])
+            brand_name = r["brand"]
             optimized = r.get("optimized") or ""
             brand_list = base["brands"]
             segment_id = r.get("segmentId", [None])[0] if r.get("segmentId") else None
@@ -185,7 +157,7 @@ class Query2:
                     "creativities": optimized,
                     "sends": 0, "clicks": 0, "clickers": 0,
                     "opens": 0, "openers": 0, "unsubs": 0,
-                    "subject": self.clean_text(r["subject"]), 
+                    "subject": r["subject"], 
                     "segment_id": segment_id,
                     "date_schedule":date_schedule
 
@@ -310,8 +282,8 @@ class Query2:
         query = f"""
             SELECT
                 adv_id, id_routers, tag_id, age_range, gender, main_isp,
-                base64Decode(brand) AS brand, optimized,
-                base64Decode(subject) AS subject,
+                brand, optimized,
+                subject,
                 dep AS departement,
                 date_schedule,
                 SUM(sends) AS sends,
@@ -412,11 +384,11 @@ class Query2:
                 seg["openers"] += openers
                 seg["unsubs"] += unsubs
 
-            brand_name = self.clean_text(r["brand"])
+            brand_name =r["brand"]
             segment_id = r.get("segmentId", [None])[0] if r.get("segmentId") else None
             
             optimized_url = r.get("optimized") or ""
-            subject = self.clean_text(r["subject"]) or ""
+            subject = r["subject"] or ""
             date_schedule = r.get("date_schedule")
             brand = adv["brands_map"].get(brand_name)
             if not brand:
@@ -602,6 +574,7 @@ class Query2:
         return result
     
     def all_bases(self, country=None, tags=None, date_schedule=None, date_start=None, date_end=None):
+
         joins = []
         conditions = []
         if tags:
@@ -700,3 +673,17 @@ class Query2:
             })
 
         return result
+    
+    def build_segment_index(self):
+        index = {}
+        for f in os.listdir(CSV_DIR):
+            if f.endswith(".csv"):
+                path = os.path.join(CSV_DIR, f)
+                try:
+                    df = pd.read_csv(path, sep=';', usecols=['id_segment'])
+                except Exception as e:
+                    print(f"Impossible de lire {path}: {e}")
+                    continue
+                for seg_id in df['id_segment'].tolist():
+                    index[seg_id] = path
+        return index

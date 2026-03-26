@@ -42,7 +42,7 @@ def job_cron():
     #cron.start_act()
     #cron.start_tags()
     #cron.start_report_final()
-    #cron.start_auto_plan()
+    #cron.start_segment()
     print(f"[{datetime.now()}] Exécution du cron  {datetime.now() - start}")
 
 
