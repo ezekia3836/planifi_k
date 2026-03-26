@@ -26,10 +26,9 @@ async def get_report_base(base_id:int):
 async def all_advertisers(
     date_schedule:Optional[str]=None,
     date_start:Optional[str]=None,
-    date_end:Optional[str]=None,
-    tags:list[str] | None =Query(None)
+    date_end:Optional[str]=None
 ):
-    return query.all_advertisers(date_schedule=date_schedule,date_start=date_start,date_end=date_end,tags=tags)
+    return query.all_advertisers(date_schedule=date_schedule,date_start=date_start,date_end=date_end)
 
 @router.get("/all_bases/",summary="Liste toutes bases dans reporting")
 @cache(expire=60)

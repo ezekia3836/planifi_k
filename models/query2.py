@@ -514,41 +514,29 @@ class Query2:
 
         return result
     
-    def all_advertisers(self, date_schedule=None, date_start=None, date_end=None, tags=None):
-        joins = []
+    def all_advertisers(self, date_schedule=None, date_start=None, date_end=None):
         conditions = []
-        if tags:
-            if isinstance(tags, str):
-                tags = [tags]
-            joins.append("JOIN tags t ON r.tag_id = t.id")
-            tags_value = ",".join([f"'{t}'" for t in tags])
-            conditions.append(f"t.tag IN ({tags_value})")
-
         if date_schedule:
             conditions.append(f"has(r.date_schedule, '{date_schedule}')")
-
         if date_start and date_end:
             conditions.append(
                 f"arrayExists(x -> x BETWEEN '{date_start}' AND '{date_end}', r.date_schedule)"
             )
-
-        join_clause = " ".join(joins)
         where_clause = ""
         if conditions:
             where_clause = " WHERE " + " AND ".join(conditions)
-
         query = f"""
         WITH stats AS (
             SELECT 
                 r.adv_id,
+                r.tag_id,
                 SUM(r.sends) AS sends,
                 SUM(r.openers) AS openers,
                 SUM(r.clickers) AS clickers,
                 SUM(r.unsubs) AS unsubs
             FROM {self.table} r
-            {join_clause}
             {where_clause}
-            GROUP BY r.adv_id
+            GROUP BY r.adv_id, r.tag_id
         ),
         ca_unique AS (
             SELECT 
@@ -560,7 +548,6 @@ class Query2:
                     r.id_routers,
                     MAX(r.ca) AS ca
                 FROM {self.table} r
-                {join_clause}
                 {where_clause}
                 GROUP BY r.adv_id, r.id_routers
             )
@@ -568,7 +555,8 @@ class Query2:
         )
         SELECT 
             s.adv_id AS adv_id,
-            a.name,
+            t.tag AS tag,
+            a.name AS advertiser_name,
             s.sends,
             s.openers,
             s.clickers,
@@ -579,10 +567,10 @@ class Query2:
             ROUND(s.openers / NULLIF(s.sends,0) * 100,3) AS taux_openers, 
             ROUND(s.clickers / NULLIF(s.sends,0) * 100,3) AS taux_clickers,
             ROUND(s.unsubs / NULLIF(s.sends,0) * 100,3) AS taux_unsubs
-
         FROM stats s
         JOIN ca_unique cu ON s.adv_id = cu.adv_id
         JOIN advertiser a ON s.adv_id = a.id
+        JOIN tags t ON s.tag_id = t.id
         """
 
         rows = self._execute_query(query)
@@ -590,8 +578,9 @@ class Query2:
         result = []
         for row in rows:
             result.append({
-                "advrtiser_id": row["adv_id"],
-                "advertiser_name": row["name"],
+                "advertiser_id": row["adv_id"],
+                "advertiser_name": row["advertiser_name"],
+                "tag": row["tag"],
                 "globales": {
                     "sends": row["sends"],
                     "openers": row["openers"],
@@ -603,15 +592,15 @@ class Query2:
                     "taux_clickers": row["taux_clickers"],
                     "taux_unsubs": row["taux_unsubs"],
                     "analyse": {
-                        "taux_clickers": self.analyze.analyze_click_rate(row['taux_clickers'] if row["taux_clickers"] else 0.0),
+                        "taux_clickers": self.analyze.analyze_click_rate(row['taux_clickers'] or 0.0),
                         "taux_cto": self.analyze.analyze_cto_rate(row["taux_cto"], row["openers"]),
-                        "taux_unsubs": self.analyze.analyze_unsub_rate(row["taux_unsubs"] if row["taux_unsubs"] else 0.0)
+                        "taux_unsubs": self.analyze.analyze_unsub_rate(row["taux_unsubs"] or 0.0)
                     }
                 }
             })
 
         return result
-   
+    
     def all_bases(self, country=None, tags=None, date_schedule=None, date_start=None, date_end=None):
         joins = []
         conditions = []
