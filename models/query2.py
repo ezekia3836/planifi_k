@@ -159,6 +159,7 @@ class Query2:
                 seg["openers"] += openers
                 seg["unsubs"] += unsubs
 
+
             push_dim("age_range", r["age_range"])
             push_dim("gender", r["gender"])
             push_dim("isp", r["main_isp"])
@@ -244,7 +245,20 @@ class Query2:
                         "taux_unsubs": self.analyze.analyze_unsub_rate(tu_b)
                     }
                 })
-
+            for dim_name, dim_vals in base["dimensions"].items():
+                for seg in dim_vals.values(): 
+                    tc_b, to_b, tu_b, cto_b = compute_rates(seg["sends"], seg["openers"], seg["clickers"], seg["unsubs"])
+                    seg.update({
+                        "taux_clickers": tc_b,
+                        "taux_openers": to_b,
+                        "taux_unsubs": tu_b,
+                        "taux_cto": cto_b,
+                        "analyses": {
+                            "taux_clickers": self.analyze.analyze_click_rate(tc_b),
+                            "taux_cto": self.analyze.analyze_cto_rate(cto_b, seg["openers"]),
+                            "taux_unsubs": self.analyze.analyze_unsub_rate(tu_b)
+                        }
+                    })
             result_bases.append({
                 "database_id": base["database_id"],
                 "id_routers": base["id_routers"],
@@ -270,7 +284,6 @@ class Query2:
                 },
                 "dimensions": base["dimensions"]
             })
-
         tc_g, to_g, tu_g, cto_g = compute_rates(total["sends"], total["openers"], total["clickers"], total["unsubs"])
         ecpm_g = round(total["ca"] / total["sends"] * 1000, 3) if total["sends"] else 0
 
