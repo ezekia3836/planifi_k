@@ -1,4 +1,5 @@
 from models.query2 import Query2
+from reporting.auto.data import data_auto
 from fastapi import APIRouter,Depends, Query
 from typing import Optional
 from fastapi import FastAPI, HTTPException
@@ -11,6 +12,7 @@ from reporting.schema2 import (
     BasesResponse
 )
 segment_index = Query2().build_segment_index()
+test = data_auto()
 query = Query2()
 router = APIRouter(prefix="/reporting", 
     tags=["Reporting"])
@@ -44,30 +46,15 @@ async def all_bases(
 
 
 @router.get("/segment",summary="Liste segments")
-def get_segment(id_segment: Optional[int]=None):
-    csv_file = segment_index.get(id_segment)
-    if id_segment is not None:
-        if not csv_file:
-            raise HTTPException(status_code=404, detail=f"id_segment {id_segment} non trouvé")
-        try:
-            df = pd.read_csv(csv_file, sep=';')
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Erreur lecture CSV {csv_file}: {e}")
-        row = df[df['id_segment'] == id_segment]
-        if row.empty:
-            raise HTTPException(status_code=404, detail=f"id_segment {id_segment} non trouvé dans {csv_file}")
-        return row[['id_segment','segment_name','expertserver','idsendout','database_id']].to_dict(orient='records')[0]
-    all_rows=[]
-    for csv_file in set(segment_index.values()):
-        try:
-            df = pd.read_csv(csv_file, sep=';')
-            all_rows.extend(df[['id_segment','segment_name','expertserver','idsendout','database_id']].to_dict(orient='records'))
-        except Exception as e:
-            print(f"Erreur lecture {csv_file}: {e}")
-    return all_rows
+def get_segment(id_segment: Optional[int]=None,database_id:Optional[int]=None):
+    return query.get_segment(id_segment,database_id)
     
 @router.post("/reload_index",summary="Recharge les segments")
 def reload_index():
     global segment_index
     segment_index = Query2().build_segment_index()
     return {"message": f"Index reconstruit avec {len(segment_index)} segments"}
+
+@router.get("/test/{adv_id}")
+def get_test(adv_id):
+    return test.get_data(adv_id)

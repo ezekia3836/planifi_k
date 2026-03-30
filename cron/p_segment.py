@@ -60,23 +60,21 @@ class p_segment:
         logging.info("LANCEMENT....")
         clean_csv_dir()
         self.log=LogManager()
-        #expert_df = GetExpert().get_expert()
-        expert_df = pd.read_csv("C:/Users/DEV-014/Desktop/PLANIFI_K/cron/resultat_clean.csv", sep=';')
+        output_file=GetExpert().get_expert()
+        expert_df = pd.read_csv(output_file, sep=';')
         if expert_df is None or expert_df.empty:
             logging.info("Données vide")
             return
-
+        
         BATCH_SIZE = 100
         PAUSE_API = 0.3
         buffer_segments = []
 
         for row in expert_df.itertuples(index=False):
-
             apiKey = str(row.expertapiid).strip()
             server = int(row.expertserver)
             idsendout = int(row.idsendout)
             stats_id = int(row.id)
-
             segments = self.get_segments(apiKey, server, idsendout)
             if not segments:
                 continue

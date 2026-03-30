@@ -12,6 +12,7 @@ venv/
 config/*
 !config/ClickHouseConfig.py
 !config/PgConfig.py
+!config/konticrea.py
 
 Verisure/
 google/

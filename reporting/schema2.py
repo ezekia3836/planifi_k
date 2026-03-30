@@ -31,6 +31,7 @@ class BrandItem(BaseModel):
     creativities:str
     subject:str
     segment_id:int
+    comment:str
     date_schedule: List[date]
     sends: int=0
     clicks:int=0

@@ -1,17 +1,19 @@
 from collections import defaultdict
+import csv
+from unittest import result
 from config.ClickHouseConfig import ClickHouseConfig
 from reporting.analyze import analyse
 import math
 import pandas as pd
 import os
 import re
-CSV_DIR="C:/Users/DEV-014/Desktop/PLANIFI_K/csv_segments"
+CSV_DIR="csv_segments"
 class Query2:
     def __init__(self):
         self.clk = ClickHouseConfig().getClient_prod()
         self.analyze = analyse()
         self.table = "prod_reporting"
-
+        self.segment_index = self.build_segment_index()
     def _execute_query(self, query,params=None):
         result = self.clk.query(query,parameters=params or {})
         return [dict(zip(result.column_names, r)) for r in result.result_rows]
@@ -54,6 +56,7 @@ class Query2:
                 brand,
                 optimized,
                 subject,
+                comment,
                 dep AS departement,
                 main_isp,
                 date_schedule,
@@ -70,7 +73,7 @@ class Query2:
             GROUP BY
                 database_id, id_routers, tag_id,
                 age_range, gender, main_isp,
-                brand, optimized, date_schedule, subject, dep
+                brand, optimized, date_schedule, subject, dep,comment
         """
 
         rows = self._execute_query(query, {"adv_id": adv_id})
@@ -150,11 +153,13 @@ class Query2:
             brand_list = base["brands"]
             segment_id = r.get("segmentId", [None])[0] if r.get("segmentId") else None
             date_schedule = r.get("date_schedule")
+            comment = r.get("comment") or ""
             brand = next((b for b in brand_list if b["name"] == brand_name), None)
             if not brand:
                 brand = {
                     "name": brand_name,
                     "creativities": optimized,
+                    "comment":comment,
                     "sends": 0, "clicks": 0, "clickers": 0,
                     "opens": 0, "openers": 0, "unsubs": 0,
                     "subject": r["subject"], 
@@ -682,8 +687,54 @@ class Query2:
                 try:
                     df = pd.read_csv(path, sep=';', usecols=['id_segment'])
                 except Exception as e:
-                    print(f"Impossible de lire {path}: {e}")
                     continue
                 for seg_id in df['id_segment'].tolist():
-                    index[seg_id] = path
+                    if seg_id not in index:
+                        index[seg_id] = []
+                    index[seg_id].append(path)
         return index
+    
+    def load_all_csv(self):
+        dfs = []
+        for f in os.listdir(CSV_DIR):
+            if f.endswith(".csv"):
+                path = os.path.join(CSV_DIR, f)
+                try:
+                    dfs.append(pd.read_csv(path, sep=';'))
+                except Exception as e:
+                    print(f"Erreur lecture {path}: {e}")
+        return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
+    
+    def get_segment(self, id_segment=None, database_id=None):
+        if id_segment is None and database_id is None:
+            df = self.load_all_csv()
+            if df.empty:
+                return {"message": "Données vides"}
+            df.drop(columns=["updated_at"],inplace=True)
+            return {
+                "total":len(df),
+                "segments":df.to_dict(orient='records')
+            }
+        if id_segment is not None:
+            csv_files = self.segment_index.get(id_segment)
+            if database_id is not None:
+                csv_files = [f for f in csv_files if f.endswith(f"segments_base_{database_id}.csv")]
+            if not csv_files:
+                return {"message": "id_segment non trouvé"}
+            dfs = []
+            for file in csv_files:
+                df = pd.read_csv(file, sep=';')
+                dfs.append(df[df["id_segment"] == id_segment])
+            df_filtered = pd.concat(dfs, ignore_index=True)
+        else:
+            csv_file = os.path.join(CSV_DIR, f"segments_base_{database_id}.csv")
+            if not os.path.exists(csv_file):
+                return {"message": "database_id non trouvé"}
+            df_filtered = pd.read_csv(csv_file, sep=';')
+        if database_id is not None:
+            df_filtered = df_filtered[df_filtered["database_id"] == database_id]
+        if df_filtered.empty:
+            return {"message": "Aucun résultats"}
+        return df_filtered[
+            ["id_segment","segment_name","expertserver","idsendout","database_id"]
+        ].to_dict(orient='records')
