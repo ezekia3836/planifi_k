@@ -74,6 +74,7 @@ class Query2:
                 database_id, id_routers, tag_id,
                 age_range, gender, main_isp,
                 brand, optimized, date_schedule, subject, dep,comment
+            HAVING sends>=100
         """
 
         rows = self._execute_query(query, {"adv_id": adv_id})
@@ -299,11 +300,13 @@ class Query2:
                 SUM(openers) AS openers,
                 SUM(unsubs) AS unsubs,
                 MAX(ca) AS ca,
-                groupUniqArray(segmentId) AS segmentId
+                groupUniqArray(segmentId) AS segmentId,
+                comment
             FROM {self.table}
             WHERE database_id = %(db_id)s
             GROUP BY adv_id, id_routers, tag_id, age_range, gender,
-                    main_isp, brand, optimized, subject, dep,date_schedule
+                    main_isp, brand, optimized, subject, dep,date_schedule,comment
+            HAVING sends>=100
         """
         rows = self._execute_query(query, {"db_id": db_id})
 
@@ -396,6 +399,9 @@ class Query2:
             optimized_url = r.get("optimized") or ""
             subject = r["subject"] or ""
             date_schedule = r.get("date_schedule")
+            comment = r.get("comment")
+            if comment=='None':
+                comment=''
             brand = adv["brands_map"].get(brand_name)
             if not brand:
                 brand = {
@@ -403,6 +409,7 @@ class Query2:
                     "creativities": optimized_url,
                     "subject": subject,
                     "segment_id":segment_id,
+                    "comment":comment,
                     "date_schedule":date_schedule,
                     "sends": 0, "clicks": 0, "clickers": 0,
                     "opens": 0, "openers": 0, "unsubs": 0,
@@ -514,7 +521,7 @@ class Query2:
                 SUM(r.unsubs) AS unsubs
             FROM {self.table} r
             {where_clause}
-            GROUP BY r.adv_id, r.tag_id
+            GROUP BY r.adv_id, r.tag_id HAVING sends>=100
         ),
         ca_unique AS (
             SELECT 
@@ -555,26 +562,32 @@ class Query2:
 
         result = []
         for row in rows:
+            clickers = row["clickers"] or 0.0
+            sends = row["sends"] or 0.0
+            unsubs = row["unsubs"] or 0.0
             cto = row["taux_cto"] or 0.0
-            openers = row["openers"] or 0
+            openers = row["openers"] or 0.0
+            taux_clickers = row["taux_clickers"] or 0.0
+            taux_unsubs = row["taux_unsubs"] or 0.0
+            taux_openers = row["taux_openers"] or 0.0
             result.append({
                 "advertiser_id": row["adv_id"],
                 "advertiser_name": row["advertiser_name"],
                 "tag": row["tag"],
                 "globales": {
-                    "sends": row["sends"],
+                    "sends": sends,
                     "openers": openers,
-                    "clickers": row["clickers"],
-                    "unsubs": row["unsubs"],
-                    "ca": row["ca_global"],
-                    "ecpm": row["ecpm"],
-                    "taux_openers": row["taux_openers"],
-                    "taux_clickers": row["taux_clickers"],
-                    "taux_unsubs": row["taux_unsubs"],
+                    "clickers": clickers,
+                    "unsubs": unsubs,
+                    "ca": row["ca_global"] or 0.0,
+                    "ecpm": row["ecpm"] or 0.0,
+                    "taux_openers": taux_openers,
+                    "taux_clickers": taux_clickers,
+                    "taux_unsubs": taux_unsubs,
                     "analyse": {
-                        "taux_clickers": self.analyze.analyze_click_rate(row['taux_clickers'] or 0.0),
+                        "taux_clickers": self.analyze.analyze_click_rate(taux_clickers or 0.0),
                         "taux_cto": self.analyze.analyze_cto_rate(cto, openers ),
-                        "taux_unsubs": self.analyze.analyze_unsub_rate(row["taux_unsubs"] or 0.0)
+                        "taux_unsubs": self.analyze.analyze_unsub_rate(taux_unsubs or 0.0)
                     }
                 }
             })
@@ -582,7 +595,6 @@ class Query2:
         return result
     
     def all_bases(self, country=None, tags=None, date_schedule=None, date_start=None, date_end=None):
-
         joins = []
         conditions = []
         if tags:
@@ -621,7 +633,7 @@ class Query2:
             FROM {self.table} r
             {join_clause}
             {where_clause}
-            GROUP BY r.database_id
+            GROUP BY r.database_id HAVING sends>=100
         ),
         ca_unique AS (
             SELECT 
@@ -659,23 +671,27 @@ class Query2:
         rows = self._execute_query(query)
         result = []
         for row in rows:
+            clickers = row["clickers"] or 0.0
+            sends = row["sends"] or 0.0
+            unsubs = row["unsubs"] or 0.0
             cto = row["taux_cto"] or 0.0
             openers = row["openers"] or 0.0
             taux_clickers = row["taux_clickers"] or 0.0
             taux_unsubs = row["taux_unsubs"] or 0.0
+            taux_openers = row["taux_openers"] or 0.0
             result.append({
                 "database_id": row["database_id"],
                 "database_name": row["basename"],
                 "globales": {
-                    "sends": row["sends"],
+                    "sends":sends,
                     "openers": openers,
-                    "clickers": row["clickers"],
-                    "usubs": row["unsubs"],
-                    "ca": row["ca_global"],
-                    "ecpm": row["ecpm"],
-                    "taux_openers": row["taux_openers"],
-                    "taux_clickers": row["taux_clickers"],
-                    "taux_unsubs": row["taux_unsubs"],
+                    "clickers": clickers,
+                    "usubs": unsubs,
+                    "ca": row["ca_global"] or 0.0,
+                    "ecpm": row["ecpm"] or 0.0,
+                    "taux_openers": taux_openers,
+                    "taux_clickers": taux_clickers,
+                    "taux_unsubs": taux_unsubs,
                     "analyse": {
                         "taux_clickers": self.analyze.analyze_click_rate(taux_clickers if taux_clickers else 0.0),
                         "taux_cto": self.analyze.analyze_cto_rate(cto, openers),

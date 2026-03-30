@@ -113,7 +113,7 @@ class reporting:
                     ) AND vd2.idsendout IS NOT NULL
                 ) AS vd1
             ) AS idsendouts ON TRUE
-            WHERE st.id = 5 AND vd.date_shedule BETWEEN '{self.date_start}' AND '{self.date_end}' AND vd.sent>100
+            WHERE st.id = 5 AND vd.date_shedule BETWEEN '{self.date_start}' AND '{self.date_end}'
             GROUP BY pa.caeur, vd.id
         """)
         pg_map = {}
