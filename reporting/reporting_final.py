@@ -260,19 +260,15 @@ class reporting:
             except Exception as e:
                 self.notifier_erreur(f"Erreur optimize chunk {i // chunck + 1} : {e}")
         cursor.close()
-        found = sum(1 for v in optimized_map.values() if v != "optimize_vide")
-        print(f"[Optimize] {found}/{len(keys)} URLs trouvées")
         return optimized_map
     
     def report(self):
         self.seen_openers.clear()
         self.seen_clickers.clear()
-        print("Récupération Focus")
         focus_map = self.recupere_pg()
         id_routers = list(focus_map.keys())
         batch_size_events = 10_000
         temp_rows = []
-        print("Récupération events")
         for row in self.recupere_events(id_routers):
             focus_data = focus_map.get(str(row.get("id_routers")))
             if not focus_data:
@@ -300,7 +296,6 @@ class reporting:
                     batch_size_events = max(1_000, int(batch_size_events * 0.7))
                 elif elapsed < 5 and mem_ratio > 0.5:
                     batch_size_events = min(50_000, int(batch_size_events * 1.2))
-                print(f"Batch traité en {elapsed:.1f}s, batch_size={batch_size_events}")
                 temp_rows = []
         if temp_rows:
             self._process_batch(temp_rows)
@@ -314,45 +309,58 @@ class reporting:
             if month_partition not in partitions_done:
                 try:
                     self.clk.command(f"OPTIMIZE TABLE {self.table} FINAL PARTITION {month_partition}")
-                    print(f"[Optimize] partition {month_partition}")
                     partitions_done.add(month_partition)
                 except Exception as e:
-                    print(f"[Optimize] erreur partition {month_partition} : {e}")
+                    logger.warning("Erreur",e)
             dt += relativedelta(months=1)
 
-        print(f"[Optimize] {len(partitions_done)} partition(s) optimisée(s)")
-
     def _process_batch(self, rows_batch, database_id=None):
+        import gc
+        if len(rows_batch) > 10000:
+            logger.warning(f"Batch trop gros: {len(rows_batch)} → skip")
+            return
+
         df = pd.DataFrame(rows_batch)
+
         if database_id is not None:
             df = df[df["database_id"] == database_id]
+
         if df.empty:
             return
+
         if "dwh_id" not in df.columns:
             df["dwh_id"] = ""
+
         df["dwh_id"] = df["dwh_id"].astype("string").fillna("")
         dwh_ids = df["dwh_id"].dropna().unique().tolist()
+
         contacts_map = {}
         try:
             contacts_map = self.resilient_call(self.recupere_contacts, dwh_ids) or {}
         except Exception as e:
-            logger.warning(f"Contacts API indisponible: {e}")
+            logger.warning(f"Contacts indisponible: {e}")
+
         if contacts_map:
             contacts_df = (
                 pd.DataFrame.from_dict(contacts_map, orient="index")
                 .reset_index()
-                .rename(columns={"index": "dwh_id"}))
+                .rename(columns={"index": "dwh_id"})
+            )
 
             contacts_df["dwh_id"] = contacts_df["dwh_id"].astype("string")
+
             contacts_df = contacts_df.loc[:, ~contacts_df.columns.duplicated()]
+
             contact_cols = [c for c in contacts_df.columns if c != "dwh_id"]
             df = df.drop(columns=contact_cols, errors="ignore")
+
             df = df.merge(
                 contacts_df,
                 on="dwh_id",
                 how="left",
                 validate="m:1"
             )
+
         df["age_range"] = pd.cut(
             pd.to_numeric(df.get("age"), errors="coerce"),
             bins=AGE_BINS,
@@ -372,12 +380,16 @@ class reporting:
         )
 
         database_ids = df["database_id"].dropna().unique().tolist()
-        db_map = self.resilient_call(self.recupere_ktk_id, database_ids)
 
-        db_df = pd.DataFrame.from_dict(db_map, orient="index")
+        db_map = {}
+        try:
+            db_map = self.resilient_call(self.recupere_ktk_id, database_ids) or {}
+        except Exception as e:
+            logger.warning(f"DB mapping indisponible: {e}")
 
-        if not db_df.empty:
-            db_df = db_df.reset_index().rename(columns={"index": "database_id"})
+        if db_map:
+            db_df = pd.DataFrame.from_dict(db_map, orient="index") \
+                .reset_index().rename(columns={"index": "database_id"})
 
             df["database_id"] = pd.to_numeric(df["database_id"], errors="coerce")
             db_df["database_id"] = pd.to_numeric(db_df["database_id"], errors="coerce")
@@ -388,36 +400,41 @@ class reporting:
         df["basename"] = df.get("basename", "base_vide").fillna("base_vide")
         df["country"] = df.get("country", 0).fillna(0)
 
-        optimize_params = df[["id_focus", "ktk_id"]].drop_duplicates()
+        df["optimized"] = "optimized_vide"
 
-        optimized_map = {}
         try:
+            optimize_params = df[["id_focus", "ktk_id"]].drop_duplicates()
+
             optimized_map = self.resilient_call(
                 self.recuper_optimize,
                 optimize_params.to_dict("records")
             ) or {}
+
+            if optimized_map:
+                opt_df = pd.DataFrame(
+                    [(k[0], k[1], v) for k, v in optimized_map.items()],
+                    columns=["id_focus", "ktk_id", "optimized"]
+                )
+
+                df["id_focus"] = df["id_focus"].astype(str)
+                df["ktk_id"] = df["ktk_id"].astype(str)
+
+                df = df.merge(opt_df, on=["id_focus", "ktk_id"], how="left")
+
+                if "optimized_y" in df.columns:
+                    df["optimized"] = df["optimized_y"].fillna(df["optimized"])
+                    df = df.drop(columns=["optimized_x", "optimized_y"], errors="ignore")
+
         except Exception as e:
-            logger.warning(f"Optimize API indisponible: {e}")
-        df["optimized"] = "optimized_vide"
-        if optimized_map:
-            opt_df = pd.DataFrame(
-                [(k[0], k[1], v) for k, v in optimized_map.items()],
-                columns=["id_focus", "ktk_id", "optimized"]
-            )
-
-            df["id_focus"] = df["id_focus"].astype(str)
-            df["ktk_id"] = df["ktk_id"].astype(str)
-
-            df = df.merge(opt_df, on=["id_focus", "ktk_id"], how="left")
-
-            if "optimized_y" in df.columns:
-                df["optimized"] = df["optimized_y"].fillna(df["optimized"])
-                df = df.drop(columns=["optimized_x", "optimized_y"], errors="ignore")
+            logger.warning(f"Optimize indisponible: {e}")
 
         if "date_schedule" not in df.columns:
             df["date_schedule"] = [[] for _ in range(len(df))]
 
         df["date_event"] = pd.to_datetime(df["date_event"], errors="coerce")
+        if df.empty:
+            return
+
         df_grouped = df.groupby(GROUP_COLS, dropna=False).agg(
             sends=("sends", "sum"),
             opens=("opens", "sum"),
@@ -434,6 +451,8 @@ class reporting:
             }))
         ).reset_index()
 
+        if df_grouped.empty:
+            return
         df_grouped["date_schedule_max"] = (
             df_grouped["date_schedule"]
             .explode()
@@ -459,15 +478,17 @@ class reporting:
         df_grouped["dwh_id"] = df_grouped["dwh_id"].astype("string")
         df_grouped["brand"] = df_grouped["brand"].astype("string").fillna("brand_vide")
         df_grouped["subject"] = df_grouped["subject"].fillna("O_objet")
+
         df_grouped["updated_at"] = pd.to_datetime(df_grouped["updated_at"])
         df_grouped["date_event"] = pd.to_datetime(df_grouped["date_event"], errors="coerce").fillna(datetime.now())
         total = len(df_grouped)
+
         for start in range(0, total, BATCH_INSERT):
-            self.clk.insert_df(
-                self.table,
-                df_grouped.iloc[start:start + BATCH_INSERT]
-            )
+            chunk = df_grouped.iloc[start:start + BATCH_INSERT]
+
+            if not chunk.empty:
+                self.clk.insert_df(self.table, chunk)
 
         logger.info(f"Données insérées : {total} lignes")
-
         del df, df_grouped
+        gc.collect()

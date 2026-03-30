@@ -134,7 +134,6 @@ class Query2:
                 seg["openers"] += openers
                 seg["unsubs"] += unsubs
 
-
             push_dim("age_range", r["age_range"])
             push_dim("gender", r["gender"])
             push_dim("isp", r["main_isp"])
@@ -154,6 +153,8 @@ class Query2:
             segment_id = r.get("segmentId", [None])[0] if r.get("segmentId") else None
             date_schedule = r.get("date_schedule")
             comment = r.get("comment") or ""
+            if comment =='None':
+                comment=''
             brand = next((b for b in brand_list if b["name"] == brand_name), None)
             if not brand:
                 brand = {
@@ -554,13 +555,15 @@ class Query2:
 
         result = []
         for row in rows:
+            cto = row["taux_cto"] or 0.0
+            openers = row["openers"] or 0
             result.append({
                 "advertiser_id": row["adv_id"],
                 "advertiser_name": row["advertiser_name"],
                 "tag": row["tag"],
                 "globales": {
                     "sends": row["sends"],
-                    "openers": row["openers"],
+                    "openers": openers,
                     "clickers": row["clickers"],
                     "unsubs": row["unsubs"],
                     "ca": row["ca_global"],
@@ -570,7 +573,7 @@ class Query2:
                     "taux_unsubs": row["taux_unsubs"],
                     "analyse": {
                         "taux_clickers": self.analyze.analyze_click_rate(row['taux_clickers'] or 0.0),
-                        "taux_cto": self.analyze.analyze_cto_rate(row["taux_cto"], row["openers"]),
+                        "taux_cto": self.analyze.analyze_cto_rate(cto, openers ),
                         "taux_unsubs": self.analyze.analyze_unsub_rate(row["taux_unsubs"] or 0.0)
                     }
                 }
@@ -656,12 +659,16 @@ class Query2:
         rows = self._execute_query(query)
         result = []
         for row in rows:
+            cto = row["taux_cto"] or 0.0
+            openers = row["openers"] or 0.0
+            taux_clickers = row["taux_clickers"] or 0.0
+            taux_unsubs = row["taux_unsubs"] or 0.0
             result.append({
                 "database_id": row["database_id"],
                 "database_name": row["basename"],
                 "globales": {
                     "sends": row["sends"],
-                    "openers": row["openers"],
+                    "openers": openers,
                     "clickers": row["clickers"],
                     "usubs": row["unsubs"],
                     "ca": row["ca_global"],
@@ -670,9 +677,9 @@ class Query2:
                     "taux_clickers": row["taux_clickers"],
                     "taux_unsubs": row["taux_unsubs"],
                     "analyse": {
-                        "taux_clickers": self.analyze.analyze_click_rate(row['taux_clickers'] if row["taux_clickers"] else 0.0),
-                        "taux_cto": self.analyze.analyze_cto_rate(row["taux_cto"], row["openers"]),
-                        "taux_unsubs": self.analyze.analyze_unsub_rate(row["taux_unsubs"] if row["taux_unsubs"] else 0.0)
+                        "taux_clickers": self.analyze.analyze_click_rate(taux_clickers if taux_clickers else 0.0),
+                        "taux_cto": self.analyze.analyze_cto_rate(cto, openers),
+                        "taux_unsubs": self.analyze.analyze_unsub_rate(taux_unsubs if taux_unsubs else 0.0)
                     }
                 }
             })
