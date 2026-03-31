@@ -74,7 +74,6 @@ class Query2:
                 database_id, id_routers, tag_id,
                 age_range, gender, main_isp,
                 brand, optimized, date_schedule, subject, dep,comment
-            HAVING sends>=100
         """
 
         rows = self._execute_query(query, {"adv_id": adv_id})
@@ -306,7 +305,6 @@ class Query2:
             WHERE database_id = %(db_id)s
             GROUP BY adv_id, id_routers, tag_id, age_range, gender,
                     main_isp, brand, optimized, subject, dep,date_schedule,comment
-            HAVING sends>=100
         """
         rows = self._execute_query(query, {"db_id": db_id})
 
@@ -496,7 +494,6 @@ class Query2:
             stats["taux_clickers"] = round(stats["clickers"] / total_sends * 100, 3) if total_sends else 0
             stats["taux_openers"] = round(stats["openers"] / total_sends * 100, 3) if total_sends else 0
             stats["taux_unsubs"] = round(stats.get("unsubs", 0) / total_sends * 100, 3) if total_sends else 0
-
         return result
     
     def all_advertisers(self, date_schedule=None, date_start=None, date_end=None):
@@ -521,7 +518,7 @@ class Query2:
                 SUM(r.unsubs) AS unsubs
             FROM {self.table} r
             {where_clause}
-            GROUP BY r.adv_id, r.tag_id HAVING sends>=100
+            GROUP BY r.adv_id, r.tag_id
         ),
         ca_unique AS (
             SELECT 
@@ -633,7 +630,7 @@ class Query2:
             FROM {self.table} r
             {join_clause}
             {where_clause}
-            GROUP BY r.database_id HAVING sends>=100
+            GROUP BY r.database_id
         ),
         ca_unique AS (
             SELECT 
@@ -759,5 +756,5 @@ class Query2:
         if df_filtered.empty:
             return {"message": "Aucun résultats"}
         return df_filtered[
-            ["id_segment","segment_name","expertserver","idsendout","database_id"]
+            ["id_segment","segment_name","database_id"]
         ].to_dict(orient='records')

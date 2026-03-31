@@ -19,7 +19,7 @@ class LogManager:
 
     def write(self, segments):
         for s in segments:
-            line = f"{s['idsendout']}|{s['id_segment']}|{s['expertserver']}|{s['database_id']}\n"
+            line = f"{s['id_segment']}|{s['database_id']}\n"
             self.file.write(line)
             self.line_count += 1
             if self.line_count >= MAX_LINES_PER_FILE:

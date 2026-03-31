@@ -274,7 +274,7 @@ class reporting:
             if not focus_data:
                 continue
             row.update(focus_data)
-            ev  = row.get("event_type")
+            ev = row.get("event_type")
             key = (row.get("adv_id"), row.get("id_routers"), row.get("dwh_id"))
             row["sends"] = 1 if ev == "Sends" else 0
             row["opens"] = 1 if ev == "Opens" else 0
@@ -319,7 +319,6 @@ class reporting:
         if len(rows_batch) > 10000:
             logger.warning(f"Batch trop gros: {len(rows_batch)} → skip")
             return
-
         df = pd.DataFrame(rows_batch)
 
         if database_id is not None:
