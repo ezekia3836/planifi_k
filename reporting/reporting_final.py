@@ -1,7 +1,7 @@
 from config.PgConfig import PgConfig
 from config.ClickHouseConfig import ClickHouseConfig
 from config.konticrea import connect_kit
-from datetime import datetime
+from datetime import datetime,date
 import time, math, requests, psutil
 from sqlalchemy import text
 import pandas as pd
@@ -16,13 +16,15 @@ MAX_HTTP_WORKERS = 8
 
 AGE_BINS   = [0, 18, 25, 35, 45, 55, 65, 75, float("inf")]
 AGE_LABELS = ["0-18", "18-24", "25-34", "35-44", "45-54", "55-64", "65-74", "75+"]
-
 GROUP_COLS = [
+    "database_id","adv_id","id_routers","segmentId","tag_id","affiliate_id","date_event","age_range","gender","main_isp","age_gender_isp"    
+]
+"""GROUP_COLS = [
     "database_id", "segmentId", "subject", "adv_id", "id_routers",
     "tag_id", "brand", "date_event", "age_range", "gender", "main_isp",
     "age_gender_isp", "optimized", "country", "ListId", "zipcode",
     "dep", "affiliate_id","comment"
-]
+]"""
 COLUMNS_FINAL = [
     "database_id", "dwh_id",
     "country", "segmentId", "subject", "brand", "tag_id",
@@ -52,6 +54,8 @@ class reporting:
         self.pg = PgConfig().get_client()
         self.table = "prod_reporting"
         today = datetime.today()
+        year_start = 2025
+        #self.date_start=date(year_start,1,1)
         self.date_end = today.date()
         self.date_start = (today - relativedelta(months=1)).date()
         self.batch_adv_size = BATCH_ADV_SIZE
@@ -162,7 +166,6 @@ class reporting:
                     WHERE MessageId IN ({batch_str})
                       AND Date BETWEEN '{self.date_start}' AND '{self.date_end}'
                     GROUP BY MessageId, event_type, database_id
-                    ORDER BY database_id ASC
                 ) m ON e.MessageId = m.MessageId
                      AND e.event_type = m.event_type
                      AND e.run_id = m.max_run_id
@@ -263,12 +266,15 @@ class reporting:
         return optimized_map
     
     def report(self):
+        logger.info("LANCEMENT.........")
         self.seen_openers.clear()
         self.seen_clickers.clear()
+        logger.info("recup FOCUS")
         focus_map = self.recupere_pg()
         id_routers = list(focus_map.keys())
         batch_size_events = 10_000
         temp_rows = []
+        logger.info("recup EVENTS")
         for row in self.recupere_events(id_routers):
             focus_data = focus_map.get(str(row.get("id_routers")))
             if not focus_data:
@@ -299,20 +305,6 @@ class reporting:
                 temp_rows = []
         if temp_rows:
             self._process_batch(temp_rows)
-        self._optimize_partitions()
-
-    def _optimize_partitions(self):
-        partitions_done = set()
-        dt = self.date_start
-        while dt <= self.date_end:
-            month_partition = dt.strftime("%Y%m")
-            if month_partition not in partitions_done:
-                try:
-                    self.clk.command(f"OPTIMIZE TABLE {self.table} FINAL PARTITION {month_partition}")
-                    partitions_done.add(month_partition)
-                except Exception as e:
-                    logger.warning("Erreur",e)
-            dt += relativedelta(months=1)
 
     def _process_batch(self, rows_batch, database_id=None):
         import gc
@@ -400,7 +392,6 @@ class reporting:
         df["country"] = df.get("country", 0).fillna(0)
 
         df["optimized"] = "optimized_vide"
-
         try:
             optimize_params = df[["id_focus", "ktk_id"]].drop_duplicates()
 
@@ -433,7 +424,6 @@ class reporting:
         df["date_event"] = pd.to_datetime(df["date_event"], errors="coerce")
         if df.empty:
             return
-
         df_grouped = df.groupby(GROUP_COLS, dropna=False).agg(
             sends=("sends", "sum"),
             opens=("opens", "sum"),
@@ -445,6 +435,14 @@ class reporting:
             bounces=("bounces", "sum"),
             ca=("ca", "max"),
             dwh_id=("dwh_id", "first"),
+            subject=("subject", "first"),
+            brand=("brand", "first"),
+            zipcode=("zipcode", "first"),
+            dep=("dep", "first"),
+            comment=("comment", "first"),
+            optimized=("optimized", "first"),
+            country=("country", "max"),
+            ListId=("ListId", "max"),
             date_schedule=("date_schedule", lambda x: sorted({
                 d for sub in x if isinstance(sub, list) for d in sub
             }))
@@ -459,11 +457,8 @@ class reporting:
             .groupby(level=0)
             .max()
         )
-
         df_grouped["updated_at"] = datetime.now()
-
         df_grouped = df_grouped[COLUMNS_FINAL]
-
         for col in INT_COLS:
             df_grouped[col] = (
                 pd.to_numeric(df_grouped[col], errors="coerce")
@@ -487,7 +482,6 @@ class reporting:
 
             if not chunk.empty:
                 self.clk.insert_df(self.table, chunk)
-
         logger.info(f"Données insérées : {total} lignes")
         del df, df_grouped
         gc.collect()

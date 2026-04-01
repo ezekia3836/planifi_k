@@ -45,7 +45,6 @@ def job_cron():
     #cron.start_segment()
     print(f"[{datetime.now()}] Exécution du cron  {datetime.now() - start}")
 
-
 #scheduler = BackgroundScheduler()
 #scheduler.add_job(job_cron, 'interval', minutes=2)  # ex: toutes les 2 minutes
 #scheduler.start()

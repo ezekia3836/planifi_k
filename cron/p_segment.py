@@ -18,7 +18,6 @@ class p_segment:
     def get_segments(self, api_url, api_key, database_id):
         url = f"{api_url}Api/Segments"
         params = {"apiKey": api_key}
-
         try:
             response = requests.get(url, params=params, timeout=15)
             if response.status_code == 403:

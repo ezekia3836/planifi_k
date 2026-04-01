@@ -33,9 +33,6 @@ class GetExpert:
     def get_database(self, output_file=f"{SEGMENT_DIR}/resultats.csv"):
         if os.path.isfile(output_file):
             os.remove(output_file)
-
-        logging.info("Récupère (data databases)")
-
         query = """
             SELECT api_url, api_key, service,id 
             FROM databases WHERE api_url IS NOT NULL
