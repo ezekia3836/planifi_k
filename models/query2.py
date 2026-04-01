@@ -537,7 +537,7 @@ class Query2:
         )
         SELECT 
             s.adv_id AS adv_id,
-            s.tag_id AS tag,
+            s.tag_id AS tag_id,
             a.name AS advertiser_name,
             s.sends,
             s.openers,
@@ -569,7 +569,7 @@ class Query2:
             result.append({
                 "advertiser_id": row["adv_id"],
                 "advertiser_name": row["advertiser_name"],
-                "tag": row["tag"],
+                "tag_id": row["tag_id"],
                 "globales": {
                     "sends": sends,
                     "openers": openers,
