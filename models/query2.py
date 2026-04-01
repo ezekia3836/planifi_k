@@ -537,7 +537,7 @@ class Query2:
         )
         SELECT 
             s.adv_id AS adv_id,
-            t.tag AS tag,
+            s.tag_id AS tag,
             a.name AS advertiser_name,
             s.sends,
             s.openers,
@@ -551,9 +551,8 @@ class Query2:
             ROUND(s.unsubs / NULLIF(s.sends,0) * 100,3) AS taux_unsubs
         FROM stats s
         JOIN ca_unique cu ON s.adv_id = cu.adv_id
-        JOIN advertiser a ON s.adv_id = a.id
-        JOIN tags t ON s.tag_id = t.id
-        """
+        JOIN advertiser a ON s.adv_id = a.id"""
+        #JOIN tags t ON s.tag_id = t.id
 
         rows = self._execute_query(query)
 
