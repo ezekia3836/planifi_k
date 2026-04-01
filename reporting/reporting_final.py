@@ -9,7 +9,7 @@ import numpy as np
 from dateutil.relativedelta import relativedelta
 import logging
 
-BATCH_ADV_SIZE = 100
+BATCH_ADV_SIZE = 200
 BATCH_CONTACTS = 2_000
 BATCH_INSERT = 5_000
 MAX_HTTP_WORKERS = 8
@@ -17,7 +17,7 @@ MAX_HTTP_WORKERS = 8
 AGE_BINS   = [0, 18, 25, 35, 45, 55, 65, 75, float("inf")]
 AGE_LABELS = ["0-18", "18-24", "25-34", "35-44", "45-54", "55-64", "65-74", "75+"]
 GROUP_COLS = [
-    "database_id","adv_id","id_routers","segmentId","tag_id","affiliate_id","date_event","age_range","gender","main_isp","age_gender_isp"    
+    "id_focus","database_id","adv_id","id_routers","segmentId","tag_id","affiliate_id","date_event","age_range","gender","main_isp","age_gender_isp"    
 ]
 """GROUP_COLS = [
     "database_id", "segmentId", "subject", "adv_id", "id_routers",
@@ -178,7 +178,6 @@ class reporting:
                     yield dict(zip(r.column_names, row))
             except Exception as e:
                 self.notifier_erreur(f"Erreur events batch {batch_str} : {e}")
-
     def recupere_contacts(self, dwh_ids, batch_size=BATCH_CONTACTS):
         if not dwh_ids:
             return {}
@@ -264,7 +263,6 @@ class reporting:
                 self.notifier_erreur(f"Erreur optimize chunk {i // chunck + 1} : {e}")
         cursor.close()
         return optimized_map
-    
     def report(self):
         logger.info("LANCEMENT.........")
         self.seen_openers.clear()
@@ -272,8 +270,8 @@ class reporting:
         logger.info("recup FOCUS")
         focus_map = self.recupere_pg()
         id_routers = list(focus_map.keys())
-        batch_size_events = 10_000
         temp_rows = []
+        batch_size_events = 500
         logger.info("recup EVENTS")
         for row in self.recupere_events(id_routers):
             focus_data = focus_map.get(str(row.get("id_routers")))
@@ -282,36 +280,46 @@ class reporting:
             row.update(focus_data)
             ev = row.get("event_type")
             key = (row.get("adv_id"), row.get("id_routers"), row.get("dwh_id"))
-            row["sends"] = 1 if ev == "Sends" else 0
-            row["opens"] = 1 if ev == "Opens" else 0
-            row["clicks"] = 1 if ev == "Clicks" else 0
-            row["unsubs"]  = 1 if ev == "Removals" else 0
-            row["complaints"] = 1 if ev == "Complaints" else 0
-            row["bounces"] = 1 if ev == "Bounces" else 0
-            row["openers"] = 1 if ev == "Opens" and key not in self.seen_openers  else 0
-            row["clickers"] = 1 if ev == "Clicks" and key not in self.seen_clickers else 0
-            if row["openers"]:  self.seen_openers.add(key)
-            if row["clickers"]: self.seen_clickers.add(key)
+            row["sends"] = int(ev == "Sends")
+            row["opens"] = int(ev == "Opens")
+            row["clicks"] = int(ev == "Clicks")
+            row["unsubs"] = int(ev == "Removals")
+            row["complaints"] = int(ev == "Complaints")
+            row["bounces"] = int(ev == "Bounces")
+            if ev == "Opens" and key not in self.seen_openers:
+                row["openers"] = 1
+                self.seen_openers.add(key)
+            else:
+                row["openers"] = 0
+            if ev == "Clicks" and key not in self.seen_clickers:
+                row["clickers"] = 1
+                self.seen_clickers.add(key)
+            else:
+                row["clickers"] = 0
             temp_rows.append(row)
             if len(temp_rows) >= batch_size_events:
-                start_time = time.time()
                 self._process_batch(temp_rows)
-                elapsed = time.time() - start_time
-                mem_ratio = psutil.virtual_memory().available / psutil.virtual_memory().total
-                if elapsed > 10 or mem_ratio < 0.2:
-                    batch_size_events = max(1_000, int(batch_size_events * 0.7))
-                elif elapsed < 5 and mem_ratio > 0.5:
-                    batch_size_events = min(50_000, int(batch_size_events * 1.2))
                 temp_rows = []
         if temp_rows:
             self._process_batch(temp_rows)
 
     def _process_batch(self, rows_batch, database_id=None):
         import gc
+
         if len(rows_batch) > 10000:
             logger.warning(f"Batch trop gros: {len(rows_batch)} → skip")
             return
-        df = pd.DataFrame(rows_batch)
+
+        df = pd.DataFrame.from_records(rows_batch)
+
+        needed_cols = [
+            "database_id","id_routers","adv_id","dwh_id","segmentId",
+            "subject","event_type","date_event","tag_id","brand",
+            "client_id","ListId","affiliate_id","ca","comment",'bounces', 
+            'clickers','clicks', 'complaints', 'openers', 'opens', 'sends', 'unsubs'
+        ]
+
+        df = df.reindex(columns=needed_cols)
 
         if database_id is not None:
             df = df[df["database_id"] == database_id]
@@ -319,11 +327,9 @@ class reporting:
         if df.empty:
             return
 
-        if "dwh_id" not in df.columns:
-            df["dwh_id"] = ""
-
         df["dwh_id"] = df["dwh_id"].astype("string").fillna("")
-        dwh_ids = df["dwh_id"].dropna().unique().tolist()
+
+        dwh_ids = df["dwh_id"].unique().tolist()
 
         contacts_map = {}
         try:
@@ -337,27 +343,23 @@ class reporting:
                 .reset_index()
                 .rename(columns={"index": "dwh_id"})
             )
-
+            if "dwh_id" in contacts_df.columns:
+                contacts_df = contacts_df.loc[:, ~contacts_df.columns.duplicated()]
             contacts_df["dwh_id"] = contacts_df["dwh_id"].astype("string")
+            df = df.merge(contacts_df, on="dwh_id", how="left")
+            del contacts_df
+            gc.collect()
 
-            contacts_df = contacts_df.loc[:, ~contacts_df.columns.duplicated()]
-
-            contact_cols = [c for c in contacts_df.columns if c != "dwh_id"]
-            df = df.drop(columns=contact_cols, errors="ignore")
-
-            df = df.merge(
-                contacts_df,
-                on="dwh_id",
-                how="left",
-                validate="m:1"
-            )
-
-        df["age_range"] = pd.cut(
-            pd.to_numeric(df.get("age"), errors="coerce"),
-            bins=AGE_BINS,
-            labels=AGE_LABELS,
-            right=False
-        ).astype("string").fillna("O_age")
+        if "age" in df.columns:
+            df["age"] = pd.to_numeric(df["age"], errors="coerce")
+            df["age_range"] = pd.cut(
+                df["age"],
+                bins=AGE_BINS,
+                labels=AGE_LABELS,
+                right=False
+            ).astype("string").fillna("O_age")
+        else:
+            df["age_range"] = "O_age"
 
         df["gender"] = df.get("gender").fillna("O_gender").replace({"O": "O_gender"})
         df["main_isp"] = df.get("main_isp").fillna("O_isp").replace({"Other": "O_isp"})
@@ -379,19 +381,26 @@ class reporting:
             logger.warning(f"DB mapping indisponible: {e}")
 
         if db_map:
-            db_df = pd.DataFrame.from_dict(db_map, orient="index") \
-                .reset_index().rename(columns={"index": "database_id"})
+            db_df = (
+                pd.DataFrame.from_dict(db_map, orient="index")
+                .reset_index()
+                .rename(columns={"index": "database_id"})
+            )
 
             df["database_id"] = pd.to_numeric(df["database_id"], errors="coerce")
             db_df["database_id"] = pd.to_numeric(db_df["database_id"], errors="coerce")
 
             df = df.merge(db_df, on="database_id", how="left")
 
+            del db_df
+            gc.collect()
+
         df["ktk_id"] = df.get("ktk_id", "ktk_vide").fillna("ktk_vide")
         df["basename"] = df.get("basename", "base_vide").fillna("base_vide")
         df["country"] = df.get("country", 0).fillna(0)
 
         df["optimized"] = "optimized_vide"
+
         try:
             optimize_params = df[["id_focus", "ktk_id"]].drop_duplicates()
 
@@ -411,20 +420,33 @@ class reporting:
 
                 df = df.merge(opt_df, on=["id_focus", "ktk_id"], how="left")
 
-                if "optimized_y" in df.columns:
-                    df["optimized"] = df["optimized_y"].fillna(df["optimized"])
-                    df = df.drop(columns=["optimized_x", "optimized_y"], errors="ignore")
+                df["optimized"] = df["optimized"].fillna("optimized_vide")
+
+                del opt_df
+                gc.collect()
 
         except Exception as e:
             logger.warning(f"Optimize indisponible: {e}")
+        defaults = {
+            "subject": "O_objet",
+            "brand": "brand_vide",
+            "zipcode": "zipcode_vide",
+            "dep": "dep_vide",
+            "comment": "",
+            "ListId": 0,
+            "country": 0,
+            "optimized": "optimized_vide"
+        }
+
+        for c, v in defaults.items():
+            df[c] = df.get(c, v).fillna(v)
 
         if "date_schedule" not in df.columns:
             df["date_schedule"] = [[] for _ in range(len(df))]
 
         df["date_event"] = pd.to_datetime(df["date_event"], errors="coerce")
-        if df.empty:
-            return
-        df_grouped = df.groupby(GROUP_COLS, dropna=False).agg(
+
+        df = df.groupby(GROUP_COLS, dropna=False).agg(
             sends=("sends", "sum"),
             opens=("opens", "sum"),
             openers=("openers", "max"),
@@ -448,40 +470,41 @@ class reporting:
             }))
         ).reset_index()
 
-        if df_grouped.empty:
+        if df.empty:
             return
-        df_grouped["date_schedule_max"] = (
-            df_grouped["date_schedule"]
+
+        df["date_schedule_max"] = (
+            df["date_schedule"]
             .explode()
             .pipe(pd.to_datetime, errors="coerce")
             .groupby(level=0)
             .max()
         )
-        df_grouped["updated_at"] = datetime.now()
-        df_grouped = df_grouped[COLUMNS_FINAL]
+
+        df["updated_at"] = datetime.now()
+
         for col in INT_COLS:
-            df_grouped[col] = (
-                pd.to_numeric(df_grouped[col], errors="coerce")
-                .fillna(0)
-                .astype(np.int32)
-            )
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(np.int32)
 
         for col in STR_COLS:
-            df_grouped[col] = df_grouped[col].astype("string").fillna("")
+            if col in df.columns:
+                df[col] = df[col].astype("string").fillna("")
 
-        df_grouped["dwh_id"] = df_grouped["dwh_id"].astype("string")
-        df_grouped["brand"] = df_grouped["brand"].astype("string").fillna("brand_vide")
-        df_grouped["subject"] = df_grouped["subject"].fillna("O_objet")
+        df["dwh_id"] = df["dwh_id"].astype("string")
+        df["brand"] = df["brand"].astype("string").fillna("brand_vide")
+        df["subject"] = df["subject"].fillna("O_objet")
 
-        df_grouped["updated_at"] = pd.to_datetime(df_grouped["updated_at"])
-        df_grouped["date_event"] = pd.to_datetime(df_grouped["date_event"], errors="coerce").fillna(datetime.now())
-        total = len(df_grouped)
+        df["updated_at"] = pd.to_datetime(df["updated_at"])
+        df["date_event"] = pd.to_datetime(df["date_event"], errors="coerce").fillna(datetime.now())
+        total = len(df)
 
         for start in range(0, total, BATCH_INSERT):
-            chunk = df_grouped.iloc[start:start + BATCH_INSERT]
-
+            chunk = df.iloc[start:start + BATCH_INSERT]
             if not chunk.empty:
                 self.clk.insert_df(self.table, chunk)
+
         logger.info(f"Données insérées : {total} lignes")
-        del df, df_grouped
+
+        del df
         gc.collect()
