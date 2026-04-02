@@ -32,6 +32,7 @@ conf/
 *.conf
 *.txt
 *.docx
+*.parquet
 !requirement.txt 
 brouillon/
 Tags/
