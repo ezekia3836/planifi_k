@@ -1,7 +1,10 @@
+from numpy._core.fromnumeric import partition
+from pandas._libs import missing
+from .adaptiveChunck import AdaptiveChunkManager
 from config.PgConfig import PgConfig
 from config.ClickHouseConfig import ClickHouseConfig
 from config.konticrea import connect_kit
-from datetime import datetime,date
+from datetime import datetime,date,timedelta
 import time, math, requests, psutil
 from sqlalchemy import text
 import pandas as pd
@@ -55,15 +58,15 @@ class reporting:
         self.clk = ClickHouseConfig().getClient_prod()
         self.pg = PgConfig().get_client()
         self.table = "prod_reporting"
-        today = datetime.today()
-        year_start = 2025
-        #self.date_start=date(year_start,1,1)
-        self.date_end = today.date()
-        self.date_start = (today - relativedelta(months=1)).date()
+        today = date.today()
+        self.adaptive_chunk = AdaptiveChunkManager()
         self.batch_adv_size = BATCH_ADV_SIZE
         self.konticrea = connect_kit()
         self.seen_openers= set()
         self.seen_clickers =set()
+        self.cache_contacts = {}
+        self.ktk_id_cache = {}
+        self.optimize_cache = {}
 
     def resilient_call(self, func, *args, max_retry=5, sleep_sec=5, backoff=True, **kwargs):
         attempt, wait = 1, sleep_sec
@@ -98,7 +101,7 @@ class reporting:
     def clean_adv_ids(self, adv_ids):
         return list({str(x).strip() for x in adv_ids if str(x).strip().isdigit()})
 
-    def recupere_pg(self, batch=1000):
+    def recupere_pg(self, date_start, date_end, batch=1000):
         query = text(f"""
             SELECT vd.id AS id_focus,
                    pa.caeur AS ca,
@@ -119,7 +122,7 @@ class reporting:
                     ) AND vd2.idsendout IS NOT NULL
                 ) AS vd1
             ) AS idsendouts ON TRUE
-            WHERE st.id = 5 AND vd.date_shedule BETWEEN '{self.date_start}' AND '{self.date_end}'
+            WHERE st.id = 5 AND vd.date_shedule BETWEEN '{date_start}' AND '{date_end}'
             GROUP BY pa.caeur, vd.id
         """)
         pg_map = {}
@@ -148,7 +151,7 @@ class reporting:
             return {}
         return pg_map
 
-    def recupere_events(self, id_routers_focus):
+    def recupere_events(self,id_routers_focus, date_start, date_end):
         if not id_routers_focus:
             return
         for i in range(0, len(id_routers_focus), self.batch_adv_size):
@@ -166,13 +169,13 @@ class reporting:
                     SELECT MessageId, event_type, max(run_id) AS max_run_id
                     FROM events_2
                     WHERE MessageId IN ({batch_str})
-                      AND Date BETWEEN '{self.date_start}' AND '{self.date_end}'
+                      AND Date BETWEEN '{date_start}' AND '{date_end}'
                     GROUP BY MessageId, event_type, database_id
                 ) m ON e.MessageId = m.MessageId
                      AND e.event_type = m.event_type
                      AND e.run_id = m.max_run_id
                 WHERE e.MessageId IN ({batch_str})
-                  AND e.Date BETWEEN '{self.date_start}' AND '{self.date_end}'
+                  AND e.Date BETWEEN '{date_start}' AND '{date_end}'
             """
             try:
                 r = self.resilient_call(self.clk.query, query)
@@ -180,6 +183,7 @@ class reporting:
                     yield dict(zip(r.column_names, row))
             except Exception as e:
                 self.notifier_erreur(f"Erreur events batch {batch_str} : {e}")
+   
     def recupere_contacts(self, dwh_ids, batch_size=BATCH_CONTACTS):
         if not dwh_ids:
             return {}
@@ -207,6 +211,20 @@ class reporting:
                 self.notifier_erreur(f"Erreur contacts batch : {e}")
         return contacts_map
 
+    def get_contacts_cached(self, dwh_ids):
+        missing_dwh_ids = [dwh_id for dwh_id in dwh_ids if dwh_id not in self.cache_contacts]
+        if missing_dwh_ids:
+            try:
+                new_contacts = self.recupere_contacts(missing_dwh_ids)
+                for k, v in new_contacts.items():
+                    self.cache_contacts[k] = v if isinstance(v, dict) else {"age": None, "gender": "O_gender", "main_isp": "O_isp", "zipcode": "zipcode_vide", "dep": "dep_vide"}
+            except Exception as e:
+                self.notifier_erreur(f"Erreur lors de la récupération des contacts : {e}")
+        return {
+            k: self.cache_contacts.get(k) if isinstance(self.cache_contacts.get(k), dict) else {}
+            for k in dwh_ids
+        }
+   
     def recupere_ktk_id(self, database_ids):
         if not database_ids:
             return {}
@@ -232,6 +250,20 @@ class reporting:
             self.notifier_erreur(f"Erreur ktk_id : {e}")
             return {}
 
+    def get_ktk_id_cached(self, database_ids):
+        missing_db_ids = [db_id for db_id in database_ids if db_id not in self.ktk_id_cache]
+        if missing_db_ids:
+            try:
+                new_mappings = self.recupere_ktk_id(missing_db_ids)
+                for k, v in new_mappings.items():
+                    self.ktk_id_cache[k] = v if isinstance(v, dict) else {"ktk_id": v, "basename": "base_vide", "country": 0}   
+            except Exception as e:
+                self.notifier_erreur(f"Erreur lors de la récupération des ktk_id : {e}")
+        return {
+            k: self.ktk_id_cache.get(k) if isinstance(self.ktk_id_cache.get(k), dict) else {}
+            for k in database_ids
+        }
+    
     def recuper_optimize(self, rows_list, chunck=100):
         if not self.konticrea:
             return {}
@@ -266,91 +298,125 @@ class reporting:
         cursor.close()
         return optimized_map
     
-    def adaptive_chunk_size(self):
-        vm = psutil.virtual_memory()
-        process = psutil.Process()
-        system_mem = vm.available / vm.total
-        process_mem = process.memory_info().rss / vm.total
-        pressure = system_mem - process_mem
-        if pressure < 0.15:
-            return 10
-        elif pressure < 0.30:
-            return 25
-        elif pressure < 0.50:
-            return 50
-        else:
-            return 100
-        
-    def report(self):
+    def get_optimize_cached(self, rows_list):
+        keys = list({
+            (str(self.safe(r.get("id_focus"))),
+             str(self.safe(r.get("ktk_id"))))
+            for r in rows_list
+            if self.safe(r.get("id_focus")) and self.safe(r.get("ktk_id"))
+        })
+        missing = [k for k in keys if k not in self.optimize_cache]
+        if missing:
+            try:
+                new_map = self.resilient_call(
+                    self.recuper_optimize,
+                    [{"id_focus": k[0], "ktk_id": k[1]} for k in missing]
+                ) or {}
+                for k, v in new_map.items():
+                    self.optimize_cache[k] = v if isinstance(v, str) else "optimized_vide"
+            except Exception as e:
+                logger.warning(f"Optimize indisponible: {e}")
+
+        return {k: self.optimize_cache.get(k, "optimized_vide") for k in keys} 
+    
+    def get_month_ranges(self, n_months: int):
+        today = date.today()
+        current_month_start = today.replace(day=1)
+        ranges = []
+        for i in range(n_months):
+            month_start = current_month_start - relativedelta(months=i)
+            month_end = (month_start + relativedelta(months=1)) - timedelta(days=1)
+            if i == 0:
+                month_end = today
+            ranges.append((
+                month_start.strftime("%Y-%m-%d"),
+                month_end.strftime("%Y-%m-%d"),
+                month_start.strftime("%Y%m")
+            ))
+        return list(reversed(ranges))
+    
+    def clean_cache(self,max_size=500_000):
+        if len(self.cache_contacts) > max_size:
+            self.cache_contacts.clear()
+        if len(self.ktk_id_cache) > max_size:
+            self.ktk_id_cache.clear()
+        if len(self.optimize_cache) > max_size:
+            self.optimize_cache.clear()
+   
+    def report(self, n_months=1):
         logger.info("Lancement....")
         self.seen_openers.clear()
         self.seen_clickers.clear()
-        """data = self.recupere_pg()
-        if isinstance(data, dict):
-            df = pd.DataFrame.from_dict(data, orient="index")
-            df.reset_index(inplace=True)
-            df.rename(columns={"index": "id_router"}, inplace=True)
-        else:
-            df = pd.DataFrame(data)
-        df.to_parquet(
-            "focus_map.parquet",
-            index=False,
-            engine="pyarrow",
-            compression="snappy"
-        )"""
-
-        focus_df = pd.read_parquet(
-            "focus_map.parquet",
-            engine="pyarrow"
-        )
-        focus_df["date_schedule"] = focus_df["date_schedule"].apply(
-            lambda x: x.tolist() if isinstance(x, (list, np.ndarray)) else x
-        )
-        if focus_df.empty:
-            logger.warning("Aucun focus")
-            return
-        focus_df["id_router"] = focus_df["id_router"].astype(str)
-        focus_map = focus_df.set_index("id_router").to_dict("index")
-        router_ids = list(focus_map.keys())
-
+        self.clean_cache()
         def chunk_list(lst, size):
             for i in range(0, len(lst), size):
                 yield lst[i:i + size]
+        months = self.get_month_ranges(n_months)
+        for date_start, date_end, partition in months:
+            self.clean_cache()
 
-        for id_chunk in chunk_list(router_ids, self.adaptive_chunk_size()):
-            temp_rows = []
-            for row in self.recupere_events(id_chunk):
-                focus_data = focus_map.get(str(row.get("id_routers")))
-                if not focus_data:
-                    continue
-                row.update(focus_data)
-                ev = row.get("event_type")
-                key = (
-                    row.get("adv_id"),
-                    row.get("id_routers"),
-                    row.get("dwh_id")
+            logger.info(f"Traitement mois {partition} ({date_start} → {date_end})")
+            try:
+                self.clk.command(
+                    f"ALTER TABLE prod_reporting DROP PARTITION {partition}"
                 )
-                row["sends"] = 1 if ev == "Sends" else 0
-                row["opens"] = 1 if ev == "Opens" else 0
-                row["clicks"] = 1 if ev == "Clicks" else 0
-                row["unsubs"] = 1 if ev == "Removals" else 0
-                row["complaints"] = 1 if ev == "Complaints" else 0
-                row["bounces"] = 1 if ev == "Bounces" else 0
-                row["openers"] = 1 if ev == "Opens" and key not in self.seen_openers else 0
-                row["clickers"] = 1 if ev == "Clicks" and key not in self.seen_clickers else 0
-                if row["openers"]:
-                    self.seen_openers.add(key)
-                if row["clickers"]:
-                    self.seen_clickers.add(key)
+                logger.info(f"Partition {partition} droppée")
+            except Exception as e:
+                logger.warning(f"Partition {partition} skip: {e}")
+            data = self.recupere_pg(date_start, date_end)
 
-                temp_rows.append(row)
+            if isinstance(data, dict):
+                df = pd.DataFrame.from_dict(data, orient="index")
+                df.reset_index(inplace=True)
+                df.rename(columns={"index": "id_router"}, inplace=True)
+            else:
+                df = pd.DataFrame(data)
 
-                if len(temp_rows) >= 1000:
+            if df.empty:
+                logger.warning(f"Aucun focus pour {partition}")
+                continue
+            df["id_router"] = df["id_router"].astype(str)
+            focus_map = df.set_index("id_router").to_dict("index")
+            router_ids = list(focus_map.keys())
+            for id_chunk in chunk_list(router_ids, self.adaptive_chunk.adaptive_chunk_size()):
+                self.clean_cache(max_size=300_000)
+                temp_rows = []
+                for row in self.recupere_events(id_chunk, date_start, date_end):
+                    focus_data = focus_map.get(str(row.get("id_routers")))
+                    if not focus_data:
+                        continue
+                    row.update(focus_data)
+                    ev = row.get("event_type")
+                    key = (
+                        row.get("adv_id"),
+                        row.get("id_routers"),
+                        row.get("dwh_id"))
+                    
+                    row["sends"] = 1 if ev == "Sends" else 0
+                    row["opens"] = 1 if ev == "Opens" else 0
+                    row["clicks"] = 1 if ev == "Clicks" else 0
+                    row["unsubs"] = 1 if ev == "Removals" else 0
+                    row["complaints"] = 1 if ev == "Complaints" else 0
+                    row["bounces"] = 1 if ev == "Bounces" else 0
+                    row["openers"] = 1 if ev == "Opens" and key not in self.seen_openers else 0
+                    row["clickers"] = 1 if ev == "Clicks" and key not in self.seen_clickers else 0
+                    if row["openers"]:
+                        self.seen_openers.add(key)
+                    if row["clickers"]:
+                        self.seen_clickers.add(key)
+                    temp_rows.append(row)
+
+                    if len(temp_rows) >= self.adaptive_chunk.current_chunk * 50:
+                        self.adaptive_chunk.record_batch_start()
+                        self._process_batch(temp_rows)
+                        self.adaptive_chunk.record_batch_end(len(temp_rows))
+                        temp_rows.clear()
+
+                if temp_rows:
+                    self.adaptive_chunk.record_batch_start()
                     self._process_batch(temp_rows)
+                    self.adaptive_chunk.record_batch_end(len(temp_rows))
                     temp_rows.clear()
-
-            if temp_rows:
-                self._process_batch(temp_rows)
 
     def _process_batch(self, rows_batch, database_id=None):
         import gc
@@ -366,7 +432,7 @@ class reporting:
         df["database_id"] = df["database_id"].astype(str)
         dwh_ids = df["dwh_id"].unique().tolist()
         try:
-            contacts_map = self.resilient_call(self.recupere_contacts, dwh_ids) or {}
+            contacts_map = self.get_contacts_cached(dwh_ids) or {}
         except Exception as e:
             logger.warning(f"Contacts indisponible: {e}")
             contacts_map = {}
@@ -392,7 +458,7 @@ class reporting:
         )
         database_ids = df["database_id"].unique().tolist()
         try:
-            db_map = self.resilient_call(self.recupere_ktk_id, database_ids) or {}
+            db_map = self.get_ktk_id_cached(database_ids) or {}
         except Exception as e:
             logger.warning(f"DB mapping indisponible: {e}")
             db_map = {}
@@ -402,10 +468,7 @@ class reporting:
         df["optimized"] = "optimized_vide"
         try:
             optimize_params = df[["id_focus", "ktk_id"]].drop_duplicates()
-            optimized_map = self.resilient_call(
-                self.recuper_optimize,
-                optimize_params.to_dict("records")
-            ) or {}
+            optimized_map = self.get_optimize_cached(optimize_params.to_dict("records")) or {}
             df["optimized"] = [
                 optimized_map.get((str(f), str(k)), "optimized_vide")
                 for f, k in zip(df["id_focus"], df["ktk_id"])
@@ -440,7 +503,7 @@ class reporting:
             main_isp=("main_isp", "first"),
             date_schedule=("date_schedule", lambda x: sorted({
                 d for sub in x if isinstance(sub, list) for d in sub
-            }))
+            })) 
         ).reset_index()
         if df_grouped.empty:
             return
@@ -461,10 +524,8 @@ class reporting:
                 df_grouped[col] = df_grouped[col].astype("string").fillna("")
         df_grouped["dwh_id"] = df_grouped["dwh_id"].astype("string")
         df_grouped["brand"] = df_grouped["brand"].astype("string").fillna("brand_vide")
-        df_grouped["subject"] = df_grouped["subject"].fillna("O_objet")
-        df_grouped["date_event"] = pd.to_datetime(
-            df_grouped["date_event"], errors="coerce"
-        ).fillna(datetime.now())
+        df_grouped["subject"] = df_grouped["subject"].fillna("O_objet").astype("string")    
+        df_grouped["date_event"] = pd.to_datetime( df_grouped["date_event"], errors="coerce").fillna(datetime.now())
         self.clk.insert_df("prod_reporting", df_grouped)
         """file_path = "testets.csv"
         df_grouped.to_csv(
