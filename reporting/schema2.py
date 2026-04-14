@@ -1,148 +1,146 @@
-from pydantic import BaseModel
-from typing import Dict, List, Optional,Any
+from pydantic import BaseModel, Field
+from typing import Dict, List, Optional, Any
 from datetime import date
 
-class Analyses(BaseModel):
-    taux_clickers:str
-    taux_cto:str
-    taux_unsubs:str
 
 class Stats(BaseModel):
-    sends: int
-    clicks:int
-    clickers: int
-    opens:int
-    openers: int
-    unsubs: int
-    taux_clickers: float
-    taux_cto: float
-    taux_unsubs: float
+    sends: int = 0
+    clicks: int = 0
+    clickers: int = 0
+    opens: int = 0
+    openers: int = 0
+    unsubs: int = 0
 
-class DimensionStats(Stats):
-    analyses: Analyses={}
+    taux_clickers: float = 0.0
+    taux_cto: float = 0.0
+    taux_unsubs: float = 0.0
+
 
 class Dimensions(BaseModel):
-    age_range:Optional[Dict[str,Any]]=None
-    gender:Optional[Dict[str,Any]]=None
-    isp:Optional[Dict[str,Any]]=None
+    age_range: Dict[str, Any] = Field(default_factory=dict)
+    gender: Dict[str, Any] = Field(default_factory=dict)
+    isp: Dict[str, Any] = Field(default_factory=dict)
 
 class BrandItem(BaseModel):
-    name:str
-    creativities:str
-    subject:str
-    segment_id:int
-    comment:str
-    date_schedule: List[date]
-    sends: int=0
-    clicks:int=0
-    clickers: int=0
-    opens:int=0
-    openers: int=0
-    unsubs: int=0
-    taux_clickers: float=0.0
-    taux_cto: float=0.0
-    taux_unsubs: float=0.0
-    analyses:Analyses={}
-    
+    name: str
+    id_routers: str
+    tag_id: int
+    creativities: str
+    subject: str
+    segment_id: int
+    comment: str
+    date_schedule: List[date] = Field(default_factory=list)
+
+    sends: int = 0
+    clicks: int = 0
+    clickers: int = 0
+    opens: int = 0
+    openers: int = 0
+    unsubs: int = 0
+
+    taux_clickers: float = 0.0
+    taux_cto: float = 0.0
+    taux_unsubs: float = 0.0
+    ca: float = 0.0
+    ecpm: float = 0.0
+    dimensions: Dimensions = Field(default_factory=Dimensions)
 
 class BaseItem(BaseModel):
     database_id: int
-    id_routers: str
-    tag_id: int
-    brands: List[BrandItem]
-    sends: int
-    clicks:int
-    clickers: int
-    opens:int
-    openers: int
-    unsubs: int
-    taux_clickers: float=0.0
-    taux_openers: float=0.0
-    taux_unsubs: float=0.0
-    taux_cto: float=0.0
-    ca: float=0.0
-    ecpm: float=0.0
-    classification:str
-    analyses: Analyses={}
-    dimensions: Dimensions={}
+    brands: List[BrandItem] = Field(default_factory=list)
+    sends: int = 0
+    clicks: int = 0
+    clickers: int = 0
+    opens: int = 0
+    openers: int = 0
+    unsubs: int = 0
+    taux_clickers: float = 0.0
+    taux_openers: float = 0.0
+    taux_unsubs: float = 0.0
+    taux_cto: float = 0.0
+    ca: float = 0.0
+    ecpm: float = 0.0
+    classification: str = ""
+    dimensions: Dimensions = Field(default_factory=Dimensions)
 
 class DepStatsModel(BaseModel):
-    taux_clickers: Optional[float] = None
-    taux_openers: Optional[float] = None
-    taux_unsubs: Optional[float] = None
-class GlobalAdvertiserStats(BaseModel):
-    sends: int=0
-    clicks:int=0
-    clickers: int=0
-    opens:int=0
-    openers: int=0
-    unsubs: int=0
-    ecpm: float=0.0
-    ca: float=0.0
-    taux_clickers: float=0.0
-    taux_openers: float=0.0
-    taux_unsubs: float=0.0
-    taux_cto: float=0.0
-    analyses:Analyses={}
-    analyse_dep: Dict[str, DepStatsModel]
+    taux_clickers: float = 0.0
+    taux_openers: float = 0.0
+    taux_unsubs: float = 0.0
 
+class GlobalAdvertiserStats(BaseModel):
+    sends: int = 0
+    clicks: int = 0
+    clickers: int = 0
+    opens: int = 0
+    openers: int = 0
+    unsubs: int = 0
+    ecpm: float = 0.0
+    ca: float = 0.0
+    taux_clickers: float = 0.0
+    taux_openers: float = 0.0
+    taux_unsubs: float = 0.0
+    taux_cto: float = 0.0
+
+    analyse_dep: Dict[str, DepStatsModel] = Field(default_factory=dict)
 
 class GlobalAdvertiserResponse(BaseModel):
-    advertiser_id:str
-    globales:Optional[GlobalAdvertiserStats]=None
-    bases:List[BaseItem]
+    advertiser_id: str
+    globales: GlobalAdvertiserStats = Field(default_factory=GlobalAdvertiserStats)
+    bases: List[BaseItem] = Field(default_factory=list)
+
 
 class GobalBaseStats(BaseModel):
-    sends:int=0
-    clicks:int=0
-    clickers:int=0
-    opens:int=0
-    openers:int=0
-    unsubs:int=0
-    ca:int=0
-    ecpm:float=0.0
-    taux_clickers:float=0.0
-    taux_openers:float=0.0
-    taux_unsubs:float=0.0
-    taux_cto:float=0.0
-    taux_unsubs:float=0.0
-    analyses:Analyses={}
-    analyse_dep: Dict[str, DepStatsModel]
+    sends: int = 0
+    clicks: int = 0
+    clickers: int = 0
+    opens: int = 0
+    openers: int = 0
+    unsubs: int = 0
+    ca: float = 0.0
+    ecpm: float = 0.0
+    taux_clickers: float = 0.0
+    taux_openers: float = 0.0
+    taux_unsubs: float = 0.0
+    taux_cto: float = 0.0
+    analyse_dep: Dict[str, DepStatsModel] = Field(default_factory=dict)
 
 class AdvertiserItem(BaseModel):
-    advertiser_id:str
-    id_routers:int=0
-    brands: List[BrandItem]
-    tag:int=0
-    sends:int=0
-    clicks:int=0
-    clickers:int=0
-    opens:int=0
-    openers:int=0
-    unsubs:int=0
-    ca:int=0
-    ecpm:float=0.0
-    taux_clickers:float=0.0
-    taux_openers:float=0.0
-    taux_unsubs:float=0.0
-    taux_cto:float=0.0
-    classification:str
-    analyses:Analyses={}
-    dimensions:Dimensions={}
-    
+    advertiser_id: int
+    brands: List[BrandItem] = Field(default_factory=list)
+    sends: int = 0
+    clicks: int = 0
+    clickers: int = 0
+    opens: int = 0
+    openers: int = 0
+    unsubs: int = 0
+    ca: float = 0.0
+    ecpm: float = 0.0
+    taux_clickers: float = 0.0
+    taux_openers: float = 0.0
+    taux_unsubs: float = 0.0
+    taux_cto: float = 0.0
+    classification: str = ""
+    dimensions: Dimensions = Field(default_factory=Dimensions)
+
 class GlobalBaseResponse(BaseModel):
-    database_id:str
-    globales:GobalBaseStats
-    advertisers:List[AdvertiserItem]
+    database_id: str
+    globales: GobalBaseStats
+    advertisers: List[AdvertiserItem] = Field(default_factory=list)
+
 class ListAdvertisersReporting(BaseModel):
-    adv_id:int
-    name:str
+    adv_id: int
+    name: str
+
 class AdvertisersResponse(BaseModel):
-    total:int
-    advertisers:List[ListAdvertisersReporting]
+    total: int
+    advertisers: List[ListAdvertisersReporting]
+
 class ListBasesReporting(BaseModel):
-    database_id:int
-    basename:str
+    database_id: int
+    basename: str
+
+
 class BasesResponse(BaseModel):
-    total:int
-    bases:List[ListBasesReporting]
+    total: int
+    bases: List[ListBasesReporting]

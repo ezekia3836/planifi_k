@@ -1,5 +1,3 @@
-from numpy._core.fromnumeric import partition
-from pandas._libs import missing
 from .adaptiveChunck import AdaptiveChunkManager
 from config.PgConfig import PgConfig
 from config.ClickHouseConfig import ClickHouseConfig
@@ -11,13 +9,15 @@ import pandas as pd
 import numpy as np
 from dateutil.relativedelta import relativedelta
 import logging
+import os
+import gc
 
 BATCH_ADV_SIZE = 5000
 BATCH_CONTACTS = 2_000
 BATCH_INSERT = 5_000
 MAX_HTTP_WORKERS = 8
 
-AGE_BINS   = [0, 18, 25, 35, 45, 55, 65, 75, float("inf")]
+AGE_BINS = [0, 18, 25, 35, 45, 55, 65, 75, float("inf")]
 AGE_LABELS = ["0-18", "18-24", "25-34", "35-44", "45-54", "55-64", "65-74", "75+"]
 NEED_COLS = [
     "database_id","id_routers","id_focus","adv_id","dwh_id",
@@ -40,7 +40,7 @@ COLUMNS_FINAL = [
 ]
 INT_COLS = [
     "database_id", "segmentId", "tag_id", "adv_id", "sends", "opens",
-    "openers", "clicks", "clickers", "unsubs","complaints","bounces", "ca", "ListId",
+    "openers", "clicks", "clickers", "unsubs","complaints","bounces","ListId",
     "affiliate_id", "country",
 ]
 STR_COLS = [
@@ -58,12 +58,9 @@ class reporting:
         self.clk = ClickHouseConfig().getClient_prod()
         self.pg = PgConfig().get_client()
         self.table = "prod_reporting"
-        today = date.today()
         self.adaptive_chunk = AdaptiveChunkManager()
         self.batch_adv_size = BATCH_ADV_SIZE
         self.konticrea = connect_kit()
-        self.seen_openers= set()
-        self.seen_clickers =set()
         self.cache_contacts = {}
         self.ktk_id_cache = {}
         self.optimize_cache = {}
@@ -151,31 +148,43 @@ class reporting:
             return {}
         return pg_map
 
-    def recupere_events(self,id_routers_focus, date_start, date_end):
+    def recupere_events(self, id_routers_focus, date_start, date_end):
         if not id_routers_focus:
             return
         for i in range(0, len(id_routers_focus), self.batch_adv_size):
-            batch     = id_routers_focus[i:i + self.batch_adv_size]
+            batch = id_routers_focus[i:i + self.batch_adv_size]
             batch_str = ",".join(str(x) for x in batch)
-            if not batch_str:
-                continue
             query = f"""
-                SELECT e.database_id, e.MessageId AS id_routers, e.adv_id, e.dwh_id,
-                       e.SegmentId AS segmentId, e.MessageSubject AS subject,
-                       e.event_type, e.Date AS date_event, e.tag AS tag_id,
-                       e.brand, e.client_id, e.ListId, e.affiliate_id
-                FROM events_2 e
-                INNER JOIN (
-                    SELECT MessageId, event_type, max(run_id) AS max_run_id
-                    FROM events_2
-                    WHERE MessageId IN ({batch_str})
-                      AND Date BETWEEN '{date_start}' AND '{date_end}'
-                    GROUP BY MessageId, event_type, database_id
-                ) m ON e.MessageId = m.MessageId
-                     AND e.event_type = m.event_type
-                     AND e.run_id = m.max_run_id
-                WHERE e.MessageId IN ({batch_str})
-                  AND e.Date BETWEEN '{date_start}' AND '{date_end}'
+            SELECT
+                database_id,
+                MessageId AS id_routers,
+                adv_id,
+                dwh_id,
+                toDate(Date) AS date_event,
+                argMax(SegmentId, run_id) AS segmentId,
+                argMax(MessageSubject, run_id) AS subject,
+                argMax(tag, run_id) AS tag_id,
+                argMax(brand, run_id) AS brand,
+                argMax(client_id, run_id) AS client_id,
+                argMax(ListId, run_id) AS ListId,
+                argMax(affiliate_id, run_id) AS affiliate_id,
+                countIf(event_type = 'Sends') AS sends,
+                countIf(event_type = 'Opens') AS opens,
+                countIf(event_type = 'Clicks') AS clicks,
+                countIf(event_type = 'Removals') AS unsubs,
+                countIf(event_type = 'Complaints') AS complaints,
+                countIf(event_type = 'Bounces') AS bounces,
+                uniqExactIf(dwh_id, event_type = 'Opens') AS openers,
+                uniqExactIf(dwh_id, event_type = 'Clicks') AS clickers
+            FROM events_2
+            WHERE MessageId IN ({batch_str})
+            AND Date BETWEEN '{date_start}' AND '{date_end}'
+            GROUP BY
+                database_id,
+                MessageId,
+                adv_id,
+                date_event,
+                dwh_id
             """
             try:
                 r = self.resilient_call(self.clk.query, query)
@@ -194,11 +203,11 @@ class reporting:
                 continue
             query = f"""
                 SELECT dwh_id,
-                       argMax(age, updated_at) AS age,
-                       argMax(gender, updated_at) AS gender,
-                       argMax(main_isp, updated_at) AS main_isp,
-                       argMax(zipcode, updated_at) AS zipcode,
-                       argMax(dep,  updated_at) AS dep
+                    argMax(age, updated_at) AS age,
+                    argMax(gender, updated_at) AS gender,
+                    argMax(main_isp, updated_at) AS main_isp,
+                    argMax(zipcode, updated_at) AS zipcode,
+                    argMax(dep,  updated_at) AS dep
                 FROM prod_contacts
                 WHERE dwh_id IN ({batch_str})
                 GROUP BY dwh_id
@@ -210,7 +219,7 @@ class reporting:
             except Exception as e:
                 self.notifier_erreur(f"Erreur contacts batch : {e}")
         return contacts_map
-
+    
     def get_contacts_cached(self, dwh_ids):
         missing_dwh_ids = [dwh_id for dwh_id in dwh_ids if dwh_id not in self.cache_contacts]
         if missing_dwh_ids:
@@ -343,83 +352,73 @@ class reporting:
         if len(self.optimize_cache) > max_size:
             self.optimize_cache.clear()
    
-    def report(self, n_months=1):
-        logger.info("Lancement....")
-        self.seen_openers.clear()
-        self.seen_clickers.clear()
+    def report(self):
         self.clean_cache()
+        def check_initialization():
+            file = "etat.txt"
+            if not os.path.exists(file):
+                return False
+            try:
+                with open(file, "r") as f:
+                    return "initialized=1" in f.read().strip()
+            except Exception as e:
+                logger.error(f"Erreur lecture état : {e}")
+                return False
+
         def chunk_list(lst, size):
             for i in range(0, len(lst), size):
                 yield lst[i:i + size]
+
+        initialized = check_initialization()
+        n_months = 2 if initialized else 3
+        logger.info(f"Lancement {'régulier' if initialized else 'initial'} — {n_months} mois")
         months = self.get_month_ranges(n_months)
-        for date_start, date_end, partition in months:
-            self.clean_cache()
-
-            logger.info(f"Traitement mois {partition} ({date_start} → {date_end})")
+        success = True
+        try:
+            for date_start, date_end, partition in months:
+                logger.info(f"Traitement {date_start} à {date_end} (partition {partition})")
+                if initialized:
+                    try:
+                        query = f"ALTER TABLE {self.table} DROP PARTITION IF EXISTS {partition}"
+                        self.clk.query(query)
+                        logger.info(f"Partition supprimée : {partition}")
+                    except Exception as e:
+                        logger.warning(f"Erreur DROP partition {partition} : {e}")
+                data = self.recupere_pg(date_start, date_end)
+                if not data:
+                    logger.warning(f"Pas de données pour {partition}")
+                    continue
+                focus_map = {str(k): v for k, v in data.items()}
+                router_ids = list(focus_map.keys())
+                for id_chunk in chunk_list(router_ids, self.adaptive_chunk.adaptive_chunk_size()):
+                    rows = []
+                    for row in self.recupere_events(id_chunk, date_start, date_end):
+                        focus = focus_map.get(str(row["id_routers"]))
+                        if focus is None:
+                            continue
+                        rows.append({**row, **focus})
+                        if len(rows) >= 5_000:
+                            self._process_batch(rows)
+                            self.clean_cache(max_size=300_000)
+                            rows.clear()
+                    if rows:
+                        self._process_batch(rows)
+                        rows.clear()
+                    del rows
+                del focus_map, router_ids, data
+                gc.collect()
+        except Exception as e:
+            success = False
+            logger.error(f"Erreur pipeline : {e}", exc_info=True)
+        if success and not initialized:
             try:
-                self.clk.command(
-                    f"ALTER TABLE prod_reporting DROP PARTITION {partition}"
-                )
-                logger.info(f"Partition {partition} droppée")
+                with open("etat.txt", "w") as f:
+                    f.write("initialized=1")
+                logger.info("État initialisé")
             except Exception as e:
-                logger.warning(f"Partition {partition} skip: {e}")
-            data = self.recupere_pg(date_start, date_end)
-
-            if isinstance(data, dict):
-                df = pd.DataFrame.from_dict(data, orient="index")
-                df.reset_index(inplace=True)
-                df.rename(columns={"index": "id_router"}, inplace=True)
-            else:
-                df = pd.DataFrame(data)
-
-            if df.empty:
-                logger.warning(f"Aucun focus pour {partition}")
-                continue
-            df["id_router"] = df["id_router"].astype(str)
-            focus_map = df.set_index("id_router").to_dict("index")
-            router_ids = list(focus_map.keys())
-            for id_chunk in chunk_list(router_ids, self.adaptive_chunk.adaptive_chunk_size()):
-                self.clean_cache(max_size=300_000)
-                temp_rows = []
-                for row in self.recupere_events(id_chunk, date_start, date_end):
-                    focus_data = focus_map.get(str(row.get("id_routers")))
-                    if not focus_data:
-                        continue
-                    row.update(focus_data)
-                    ev = row.get("event_type")
-                    key = (
-                        row.get("adv_id"),
-                        row.get("id_routers"),
-                        row.get("dwh_id"))
-                    
-                    row["sends"] = 1 if ev == "Sends" else 0
-                    row["opens"] = 1 if ev == "Opens" else 0
-                    row["clicks"] = 1 if ev == "Clicks" else 0
-                    row["unsubs"] = 1 if ev == "Removals" else 0
-                    row["complaints"] = 1 if ev == "Complaints" else 0
-                    row["bounces"] = 1 if ev == "Bounces" else 0
-                    row["openers"] = 1 if ev == "Opens" and key not in self.seen_openers else 0
-                    row["clickers"] = 1 if ev == "Clicks" and key not in self.seen_clickers else 0
-                    if row["openers"]:
-                        self.seen_openers.add(key)
-                    if row["clickers"]:
-                        self.seen_clickers.add(key)
-                    temp_rows.append(row)
-
-                    if len(temp_rows) >= self.adaptive_chunk.current_chunk * 50:
-                        self.adaptive_chunk.record_batch_start()
-                        self._process_batch(temp_rows)
-                        self.adaptive_chunk.record_batch_end(len(temp_rows))
-                        temp_rows.clear()
-
-                if temp_rows:
-                    self.adaptive_chunk.record_batch_start()
-                    self._process_batch(temp_rows)
-                    self.adaptive_chunk.record_batch_end(len(temp_rows))
-                    temp_rows.clear()
-
+                logger.error(f"Erreur écriture état : {e}")
+    
     def _process_batch(self, rows_batch, database_id=None):
-        import gc
         if len(rows_batch) > 10000:
             logger.warning(f"Batch trop gros: {len(rows_batch)}")
             return
@@ -478,63 +477,36 @@ class reporting:
         if "date_schedule" not in df.columns:
             df["date_schedule"] = [[] for _ in range(len(df))]
         df["date_event"] = pd.to_datetime(df["date_event"], errors="coerce")
-        df_grouped = df.groupby(GROUP_COLS, dropna=False, sort=False, observed=True).agg(
-            sends=("sends", "sum"),
-            opens=("opens", "sum"),
-            openers=("openers", "max"),
-            clicks=("clicks", "sum"),
-            clickers=("clickers", "max"),
-            unsubs=("unsubs", "sum"),
-            complaints=("complaints", "sum"),
-            bounces=("bounces", "sum"),
-            ca=("ca", "max"),
-            dwh_id=("dwh_id", "first"),
-            subject=("subject", "first"),
-            brand=("brand", "first"),
-            zipcode=("zipcode", "first"),
-            dep=("dep", "first"),
-            comment=("comment", "first"),
-            optimized=("optimized", "first"),
-            country=("country", "max"),
-            ListId=("ListId", "max"),
-            affiliate_id=("affiliate_id", "first"),
-            age_range=("age_range", "first"),
-            gender=("gender", "first"),
-            main_isp=("main_isp", "first"),
-            date_schedule=("date_schedule", lambda x: sorted({
-                d for sub in x if isinstance(sub, list) for d in sub
-            })) 
-        ).reset_index()
-        if df_grouped.empty:
-            return
-        exploded = df_grouped["date_schedule"].explode()
+        exploded = df["date_schedule"].explode()
         exploded = pd.to_datetime(exploded, errors="coerce")
-        df_grouped["date_schedule_max"] = exploded.groupby(level=0).max()
-        df_grouped["updated_at"] = datetime.now()
-        df_grouped = df_grouped[COLUMNS_FINAL]
+        df["date_schedule_max"] = exploded.groupby(level=0).max()
+        df["updated_at"] = datetime.now()
+        df = df[COLUMNS_FINAL]
         for col in INT_COLS:
-            if col in df_grouped:
-                df_grouped[col] = (
-                    pd.to_numeric(df_grouped[col], errors="coerce")
+            if col in df:
+                df[col] = (
+                    pd.to_numeric(df[col], errors="coerce")
                     .fillna(0)
                     .astype(np.int32)
                 )
         for col in STR_COLS:
-            if col in df_grouped:
-                df_grouped[col] = df_grouped[col].astype("string").fillna("")
-        df_grouped["dwh_id"] = df_grouped["dwh_id"].astype("string")
-        df_grouped["brand"] = df_grouped["brand"].astype("string").fillna("brand_vide")
-        df_grouped["subject"] = df_grouped["subject"].fillna("O_objet").astype("string")    
-        df_grouped["date_event"] = pd.to_datetime( df_grouped["date_event"], errors="coerce").fillna(datetime.now())
-        self.clk.insert_df("prod_reporting", df_grouped)
-        """file_path = "testets.csv"
-        df_grouped.to_csv(
+            if col in df:
+                df[col] = df[col].astype("string").fillna("")
+        df["dwh_id"] = df["dwh_id"].astype("string")
+        df["brand"] = df["brand"].astype("string").fillna("brand_vide")
+        df["subject"] = df["subject"].fillna("O_objet").astype("string")
+        df["ca"] = df["ca"].fillna(0.0).astype(float)  
+        df["date_event"] = pd.to_datetime( df["date_event"], errors="coerce").fillna(datetime.now())
+        self.clk.insert_df("prod_reporting", df)
+        """file_path = "temp.csv"
+        import os
+        df.to_csv(
             file_path,
             index=False,
             sep=';',
             mode='a',
             header=not os.path.exists(file_path)
         )"""
-        logger.info(f"Données traitées : {len(df_grouped)} lignes")
-        del df, df_grouped
+        logger.info(f"Données traitées : {len(df)} lignes")
+        del df
         gc.collect()
