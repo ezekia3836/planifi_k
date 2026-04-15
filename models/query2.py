@@ -467,7 +467,6 @@ class Query2:
             brand["opens"] += opens
             brand["openers"] += openers
             brand["unsubs"] += unsubs
-
             brand["ca"] = max(brand["ca"], ca)
             brand["ca"] = max(brand["ca"], ca)
             brand["taux_clickers"] = round(brand["clickers"] / brand["sends"] * 100, 5) if brand["sends"] else 0
@@ -591,6 +590,7 @@ class Query2:
         SELECT 
             s.adv_id AS adv_id,
             a.name AS advertiser_name,
+            s.tag_id AS tag_id,
             SUM(s.sends) AS sends,
             SUM(s.openers) AS openers,
             SUM(s.clickers) AS clickers,
@@ -606,6 +606,7 @@ class Query2:
         JOIN advertiser a ON a.id = s.adv_id
         GROUP BY 
             s.adv_id,
+            s.tag_id,
             a.name,
             cu.ca_global
         """
@@ -623,6 +624,7 @@ class Query2:
             result.append({
                 "advertiser_id": str(row["adv_id"]),
                 "advertiser_name": row["advertiser_name"],
+                "tag_id":row["tag_id"],
                 "globales": {
                     "sends": sends,
                     "openers": openers,
