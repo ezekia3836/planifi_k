@@ -54,38 +54,27 @@ class analyse:
             else:
                 return "faible"
      def classify_ecpm(self, ecpm):
-        if ecpm == 0.0:
-            return "null"
-
-        if ecpm > config.REPORTING_ADVERTISER[1]:
+        if ecpm>config.REPORTING_ADVERTISER[1]:
             return "bon"
-        elif ecpm >= config.REPORTING_ADVERTISER[0]:
+        elif config.REPORTING_ADVERTISER[0]<ecpm<config.REPORTING_ADVERTISER[1]:
             return "moyen"
-        else:
+        elif ecpm<config.REPORTING_ADVERTISER[0]:
             return "faible"
-        
+        else:
+            return ""
      def classify_advertiser(self, ecpm, taux_clicks):
         ecpm_level = self.classify_ecpm(ecpm)
         click_level = self.normalize_clicks(taux_clicks)
-        if ecpm_level == "null":
-            return "E"
-
-        if ecpm_level == "bon" and click_level in ["bon", "moyen", "faible"]:
+        if ecpm_level == "bon" and (click_level == "bon" or click_level == "moyen" or click_level=="faible"):
             return "A"
-
-        if ecpm_level == "moyen":
-            if click_level in ["bon", "moyen"]:
-                return "B"
-            else:
-                return "C"
-
-        if ecpm_level == "faible":
-            if click_level in ["bon", "moyen"]:
-                return "C"
-            else:
-                return "D"
-
-        return "E"
+        elif ecpm_level == "moyen" and (click_level == "moyen" or click_level=="faible"):
+            return "B"
+        elif ecpm_level == "faible" and (click_level == "bon" or click_level == "moyen"):
+            return "C"
+        elif ecpm_level == "faible" and click_level == "faible":
+            return "D"
+        else:
+            return ""
 
      def analyse_ecpm(self,ecpm,sends):
          if sends<= config.MIN_SENDS_ECPM:

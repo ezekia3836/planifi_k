@@ -27,7 +27,7 @@ NEED_COLS = [
     "opens","sends","unsubs","date_schedule"
 ]
 GROUP_COLS = [
-    "database_id","adv_id","id_routers","segmentId","tag_id","date_event","age_gender_isp"    
+    "database_id","adv_id","id_routers","segmentId","tag_id","date_event"    
 ]
 
 COLUMNS_FINAL = [
@@ -155,36 +155,35 @@ class reporting:
             batch = id_routers_focus[i:i + self.batch_adv_size]
             batch_str = ",".join(str(x) for x in batch)
             query = f"""
+            WITH ranked AS (
+                SELECT
+                    database_id,
+                    MessageId       AS id_routers,
+                    adv_id,
+                    dwh_id,
+                    SegmentId       AS segmentId,
+                    MessageSubject  AS subject,
+                    event_type,
+                    Date            AS date_event,
+                    tag             AS tag_id,
+                    brand,
+                    client_id,
+                    ListId,
+                    affiliate_id,
+                    run_id,
+                    max(run_id) OVER (
+                        PARTITION BY database_id,MessageId,adv_id,dwh_id, event_type,ListId
+                    ) AS max_run_id
+                FROM events_2
+                PREWHERE MessageId IN ({batch_str})
+                WHERE Date BETWEEN '{date_start}' AND '{date_end}'
+            )
             SELECT
-                database_id,
-                MessageId AS id_routers,
-                adv_id,
-                dwh_id,
-                toDate(Date) AS date_event,
-                argMax(SegmentId, run_id) AS segmentId,
-                argMax(MessageSubject, run_id) AS subject,
-                argMax(tag, run_id) AS tag_id,
-                argMax(brand, run_id) AS brand,
-                argMax(client_id, run_id) AS client_id,
-                argMax(ListId, run_id) AS ListId,
-                argMax(affiliate_id, run_id) AS affiliate_id,
-                countIf(event_type = 'Sends') AS sends,
-                countIf(event_type = 'Opens') AS opens,
-                countIf(event_type = 'Clicks') AS clicks,
-                countIf(event_type = 'Removals') AS unsubs,
-                countIf(event_type = 'Complaints') AS complaints,
-                countIf(event_type = 'Bounces') AS bounces,
-                uniqExactIf(dwh_id, event_type = 'Opens') AS openers,
-                uniqExactIf(dwh_id, event_type = 'Clicks') AS clickers
-            FROM events_2
-            WHERE MessageId IN ({batch_str})
-            AND Date BETWEEN '{date_start}' AND '{date_end}'
-            GROUP BY
-                database_id,
-                MessageId,
-                adv_id,
-                date_event,
-                dwh_id
+                database_id, id_routers, adv_id, dwh_id,
+                segmentId, subject, event_type, date_event,
+                tag_id, brand, client_id, ListId, affiliate_id
+            FROM ranked
+            WHERE run_id = max_run_id
             """
             try:
                 r = self.resilient_call(self.clk.query, query)
@@ -422,91 +421,168 @@ class reporting:
         if len(rows_batch) > 10000:
             logger.warning(f"Batch trop gros: {len(rows_batch)}")
             return
+
         df = pd.DataFrame.from_records(rows_batch, columns=NEED_COLS)
+
         if database_id is not None:
             df = df[df["database_id"] == database_id]
+
         if df.empty:
             return
-        df["dwh_id"] = df.get("dwh_id", "").astype("string").fillna("")
+
+        # 🔥 TYPES UNE SEULE FOIS
+        df["dwh_id"] = df["dwh_id"].astype("string").fillna("")
         df["database_id"] = df["database_id"].astype(str)
-        dwh_ids = df["dwh_id"].unique().tolist()
+
+        # =========================
+        # 🔥 EVENTS (vectorisé)
+        # =========================
+        event = df["event_type"]
+
+        df["sends"] = (event == "Sends").astype("int8")
+        df["opens"] = (event == "Opens").astype("int8")
+        df["clicks"] = (event == "Clicks").astype("int8")
+        df["removals"] = (event == "Removals").astype("int8")
+        df["complaints"] = (event == "Complaints").astype("int8")
+        df["bounces"] = (event == "Bounces").astype("int8")
+
+        # =========================
+        # 🔥 CLICKERS / OPENERS OPTIMISÉ
+        # =========================
+        key_cols = ["adv_id", "id_routers", "dwh_id"]
+
+        clicks_mask = event == "Clicks"
+        opens_mask = event == "Opens"
+
+        df["clickers"] = 0
+        df["openers"] = 0
+
+        if clicks_mask.any():
+            df.loc[clicks_mask, "clickers"] = (
+                ~df.loc[clicks_mask].duplicated(subset=key_cols, keep="first")
+            ).astype("int8")
+
+        if opens_mask.any():
+            df.loc[opens_mask, "openers"] = (
+                ~df.loc[opens_mask].duplicated(subset=key_cols, keep="first")
+            ).astype("int8")
+
+        # =========================
+        # 🔥 CONTACTS (MAP OPTIMISÉ)
+        # =========================
+        dwh_ids = df["dwh_id"].unique()
+
         try:
             contacts_map = self.get_contacts_cached(dwh_ids) or {}
         except Exception as e:
             logger.warning(f"Contacts indisponible: {e}")
             contacts_map = {}
-        df["age"] = df["dwh_id"].map(lambda x: contacts_map.get(x, {}).get("age"))
-        df["gender"] = df["dwh_id"].map(lambda x: contacts_map.get(x, {}).get("gender", "O_gender"))
-        df["gender"] = df["gender"].replace({"O": "O_gender"})
-        df["main_isp"] = df["dwh_id"].map(lambda x: contacts_map.get(x, {}).get("main_isp", "O_isp"))
-        df["main_isp"] = df["main_isp"].replace({"Other": "O_isp"})
-        df["zipcode"] = df["dwh_id"].map(lambda x: contacts_map.get(x, {}).get("zipcode", "zipcode_vide"))
-        df["zipcode"]=df["zipcode"].fillna("zipcode_vide").astype("string")
-        df["dep"] = df["dwh_id"].map(lambda x: contacts_map.get(x, {}).get("dep", "dep_vide"))
-        df["dep"]=df["dep"].fillna("dep_vide").astype("string") 
+
+        # 🔥 vectorisation (BEAUCOUP plus rapide que lambda)
+        contacts_df = pd.DataFrame.from_dict(contacts_map, orient="index")
+        contacts_df.index.name = "dwh_id"
+        contacts_df = contacts_df.reset_index()
+
+        df = df.merge(contacts_df, on="dwh_id", how="left")
+
+        # defaults
+        df["gender"] = df["gender"].fillna("O_gender").replace({"O": "O_gender"})
+        df["main_isp"] = df["main_isp"].fillna("O_isp").replace({"Other": "O_isp"})
+        df["zipcode"] = df["zipcode"].fillna("zipcode_vide")
+        df["dep"] = df["dep"].fillna("dep_vide")
+
+        # =========================
+        # AGE RANGE (OK)
+        # =========================
         df["age_range"] = pd.cut(
             pd.to_numeric(df["age"], errors="coerce"),
             bins=AGE_BINS,
             labels=AGE_LABELS,
             right=False
         ).astype("string").fillna("O_age")
+
         df["age_gender_isp"] = (
-            df["age_range"].astype(str) + "_" +
-            df["gender"].astype(str) + "_" +
-            df["main_isp"].astype(str)
+            df["age_range"].astype(str)
+            + "_" + df["gender"].astype(str)
+            + "_" + df["main_isp"].astype(str)
         )
-        database_ids = df["database_id"].unique().tolist()
+
+        # =========================
+        # DATABASE MAP (optimisé)
+        # =========================
+        database_ids = df["database_id"].unique()
+
         try:
             db_map = self.get_ktk_id_cached(database_ids) or {}
         except Exception as e:
             logger.warning(f"DB mapping indisponible: {e}")
             db_map = {}
+
         df["ktk_id"] = df["database_id"].map(lambda x: db_map.get(x, {}).get("ktk_id", "ktk_vide"))
         df["basename"] = df["database_id"].map(lambda x: db_map.get(x, {}).get("basename", "base_vide"))
         df["country"] = df["database_id"].map(lambda x: db_map.get(x, {}).get("country", 0))
-        df["optimized"] = "optimized_vide"
+
+        # =========================
+        # OPTIMIZE (safe)
+        # =========================
         try:
             optimize_params = df[["id_focus", "ktk_id"]].drop_duplicates()
             optimized_map = self.get_optimize_cached(optimize_params.to_dict("records")) or {}
+
             df["optimized"] = [
                 optimized_map.get((str(f), str(k)), "optimized_vide")
                 for f, k in zip(df["id_focus"], df["ktk_id"])
             ]
         except Exception as e:
             logger.warning(f"Optimize indisponible: {e}")
+            df["optimized"] = "optimized_vide"
+
+        # =========================
+        # DATES (safe)
+        # =========================
+        df["date_event"] = pd.to_datetime(df["date_event"], errors="coerce")
+
         if "date_schedule" not in df.columns:
             df["date_schedule"] = [[] for _ in range(len(df))]
-        df["date_event"] = pd.to_datetime(df["date_event"], errors="coerce")
+
         exploded = df["date_schedule"].explode()
         exploded = pd.to_datetime(exploded, errors="coerce")
+
         df["date_schedule_max"] = exploded.groupby(level=0).max()
+
         df["updated_at"] = datetime.now()
+
+        # =========================
+        # FINAL CLEAN
+        # =========================
         df = df[COLUMNS_FINAL]
+
         for col in INT_COLS:
             if col in df:
-                df[col] = (
-                    pd.to_numeric(df[col], errors="coerce")
-                    .fillna(0)
-                    .astype(np.int32)
-                )
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype("int32")
+
         for col in STR_COLS:
             if col in df:
                 df[col] = df[col].astype("string").fillna("")
-        df["dwh_id"] = df["dwh_id"].astype("string")
+
         df["brand"] = df["brand"].astype("string").fillna("brand_vide")
         df["subject"] = df["subject"].fillna("O_objet").astype("string")
-        df["ca"] = df["ca"].fillna(0.0).astype(float)  
-        df["date_event"] = pd.to_datetime( df["date_event"], errors="coerce").fillna(datetime.now())
-        self.clk.insert_df("prod_reporting", df)
-        """file_path = "temp.csv"
-        import os
+        df["ca"] = df["ca"].fillna(0.0).astype(float)
+
+        # =========================
+        # OUTPUT
+        # =========================
+        file_path = "temp.csv"
+
         df.to_csv(
             file_path,
             index=False,
             sep=';',
             mode='a',
             header=not os.path.exists(file_path)
-        )"""
+        )
+
         logger.info(f"Données traitées : {len(df)} lignes")
+
         del df
         gc.collect()

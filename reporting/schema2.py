@@ -27,20 +27,19 @@ class BrandItem(BaseModel):
     tag_id: int
     creativities: str
     subject: str
-    segment_id: int
+    segment_id: List[int] = Field(default_factory=list)
     comment: str
     date_schedule: List[date] = Field(default_factory=list)
-
     sends: int = 0
     clicks: int = 0
     clickers: int = 0
     opens: int = 0
     openers: int = 0
     unsubs: int = 0
-
     taux_clickers: float = 0.0
     taux_cto: float = 0.0
     taux_unsubs: float = 0.0
+    taux_openers: float = 0.0
     ca: float = 0.0
     ecpm: float = 0.0
     dimensions: Dimensions = Field(default_factory=Dimensions)
@@ -81,7 +80,7 @@ class GlobalAdvertiserStats(BaseModel):
     taux_openers: float = 0.0
     taux_unsubs: float = 0.0
     taux_cto: float = 0.0
-
+    analyses: Dict[str, str] = Field(default_factory=dict)
     analyse_dep: Dict[str, DepStatsModel] = Field(default_factory=dict)
 
 class GlobalAdvertiserResponse(BaseModel):
@@ -103,6 +102,7 @@ class GobalBaseStats(BaseModel):
     taux_openers: float = 0.0
     taux_unsubs: float = 0.0
     taux_cto: float = 0.0
+    analyses: Dict[str, str] = Field(default_factory=dict)
     analyse_dep: Dict[str, DepStatsModel] = Field(default_factory=dict)
 
 class AdvertiserItem(BaseModel):

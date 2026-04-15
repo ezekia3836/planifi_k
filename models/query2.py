@@ -93,81 +93,37 @@ class Query2:
             }
         query = f"""
             SELECT
-                database_id,
-                id_routers,
-                tag_id,
-                age_range,
-                gender,
-                brand,
-                optimized,
-                subject,
-                comment,
-                dep AS departement,
-                main_isp,
-                date_schedule,
-                SUM(sends) AS sends,
-                SUM(clicks) AS clicks,
-                SUM(clickers) AS clickers,
-                SUM(opens) AS opens,
-                SUM(openers) AS openers,
-                SUM(unsubs) AS unsubs,
-                MAX(ca) AS ca,
-                groupUniqArray(segmentId) AS segmentId
-            FROM
-            (
-                SELECT
-                    database_id,
-                    dwh_id,
-                    adv_id,
-                    id_routers,
-                    tag_id,
-                    age_gender_isp,
-                    date_schedule_max,
-                    date_event,
-                    argMax(age_range, updated_at) AS age_range,
-                    argMax(gender, updated_at) AS gender,
-                    argMax(main_isp, updated_at) AS main_isp,
-                    argMax(dep, updated_at) AS dep,
-                    argMax(subject, updated_at) AS subject,
-                    argMax(brand, updated_at) AS brand,
-                    argMax(optimized, updated_at) AS optimized,
-                    argMax(comment, updated_at) AS comment,
-                    argMax(date_schedule, updated_at) AS date_schedule,
-                    argMax(segmentId, updated_at) AS segmentId,
-                    sum(sends) AS sends,
-                    sum(clicks) AS clicks,
-                    sum(clickers) AS clickers,
-                    sum(opens) AS opens,
-                    sum(openers) AS openers,
-                    sum(unsubs) AS unsubs,
-                    argMax(ca, updated_at) AS ca
-                FROM {self.table}
-                WHERE adv_id = %(adv_id)s
-                GROUP BY
-                    database_id,
-                    dwh_id,
-                    adv_id,
-                    id_routers,
-                    tag_id,
-                    age_gender_isp,
-                    date_schedule_max,
-                    date_event
-            )
-            GROUP BY
-                database_id,
-                id_routers,
-                tag_id,
-                age_range,
-                gender,
-                main_isp,
-                brand,
-                optimized,
-                subject,
-                dep,
-                comment,
-                date_schedule
+            adv_id,
+            database_id,
+            gender,
+            age_range,
+            main_isp,
+            dep AS departement,
+            any(id_routers)        AS id_routers,
+            any(tag_id)            AS tag_id,
+            any(brand)             AS brand,
+            any(optimized)         AS optimized,
+            any(subject)           AS subject,
+            any(comment)           AS comment,
+            any(date_schedule)     AS date_schedule,
+            sum(sends)     AS sends,
+            sum(clicks)    AS clicks,
+            sum(clickers)  AS clickers,
+            sum(opens)     AS opens,
+            sum(openers)   AS openers,
+            sum(unsubs)    AS unsubs,
+            max(ca) AS ca,
+            groupUniqArray(segmentId) AS segmentId
+        FROM {self.table}
+        WHERE adv_id = %(adv_id)s
+        GROUP BY
+            adv_id,
+            database_id,
+            gender,
+            age_range,
+            main_isp,
+            dep
         """
-
         rows = self._execute_query(query, {"adv_id": adv_id})
 
         if not rows:
@@ -223,7 +179,16 @@ class Query2:
                 if (b["name"], b["id_routers"], b["tag_id"]) == brand_key),
                 None
             )
+            segmentids = r.get("segmentId") or []
 
+            if isinstance(segmentids, str):
+                segmentids = [segmentids]
+            elif isinstance(segmentids, int):
+                segmentids = [segmentids]
+            elif segmentids is None:
+                segmentids = []
+            elif not isinstance(segmentids, list):
+                segmentids = list(segmentids)
             if not brand:
                 brand = {
                     "name": r["brand"],
@@ -232,7 +197,7 @@ class Query2:
                     "creativities": r.get("optimized") or "",
                     "comment": (r.get("comment") or "").replace("None", ""),
                     "subject": r["subject"],
-                    "segment_id": (r.get("segmentId") or [None])[0] if isinstance(r.get("segmentId"), list) else r.get("segmentId"),
+                    "segment_id": list(set(segmentids)),
                     "date_schedule": r.get("date_schedule"),
                     "sends": 0,
                     "clicks": 0,
@@ -244,7 +209,9 @@ class Query2:
                     "dimensions": {"age_range": {}, "gender": {}, "isp": {}}
                 }
                 base["brands"].append(brand)
-
+            existing = set(brand.get("segment_id") or [])
+            new_segments = set(segmentids)
+            brand["segment_id"] = list(existing | new_segments)
             brand["sends"] += sends
             brand["clicks"] += clicks
             brand["clickers"] += clickers
@@ -252,7 +219,12 @@ class Query2:
             brand["openers"] += openers
             brand["unsubs"] += unsubs
             brand["ca"] = max(brand["ca"], ca)
-
+            brand["taux_clickers"] = round(brand["clickers"] / brand["sends"] * 100, 5) if brand["sends"] else 0
+            brand["taux_openers"] = round(brand["opens"] / brand["sends"] * 100, 5) if brand["sends"] else 0
+            brand["taux_unsubs"] = round(brand["unsubs"] / brand["sends"] * 100, 5) if brand["sends"] else 0
+            brand["taux_cto"] = round(brand["clickers"] / brand["opens"] * 100, 5) if brand["opens"] else 0
+            brand["ecpm"] = round(brand["ca"] / brand["sends"] * 1000, 3) if brand["sends"] else 0
+                        
             push_dim(brand, "age_range", r["age_range"], sends, clicks, clickers, opens, openers, unsubs)
             push_dim(brand, "gender", r["gender"], sends, clicks, clickers, opens, openers, unsubs)
             push_dim(brand, "isp", r["main_isp"], sends, clicks, clickers, opens, openers, unsubs)
@@ -375,86 +347,37 @@ class Query2:
                 "taux_unsubs": self.analyze.analyze_unsub_rate(tu)
             }
         query = f"""
-            SELECT
-                adv_id,
-                id_routers,
-                tag_id,
-                age_range,
-                gender,
-                brand,
-                optimized,
-                subject,
-                comment,
-                dep AS departement,
-                main_isp,
-                date_schedule,
-                SUM(sends) AS sends,
-                SUM(clicks) AS clicks,
-                SUM(clickers) AS clickers,
-                SUM(opens) AS opens,
-                SUM(openers) AS openers,
-                SUM(unsubs) AS unsubs,
-                MAX(ca) AS ca,
-                groupUniqArray(segmentId) AS segmentId
-
-            FROM
-            (
-                SELECT
-                    database_id,
-                    dwh_id,
-                    adv_id,
-                    id_routers,
-                    tag_id,
-                    age_gender_isp,
-                    date_schedule_max,
-                    date_event,
-                    argMax(age_range, updated_at) AS age_range,
-                    argMax(gender, updated_at) AS gender,
-                    argMax(main_isp, updated_at) AS main_isp,
-                    argMax(dep, updated_at) AS dep,
-                    argMax(subject, updated_at) AS subject,
-                    argMax(brand, updated_at) AS brand,
-                    argMax(optimized, updated_at) AS optimized,
-                    argMax(comment, updated_at) AS comment,
-                    argMax(date_schedule, updated_at) AS date_schedule,
-                    argMax(segmentId, updated_at) AS segmentId,
-                    sum(sends) AS sends,
-                    sum(clicks) AS clicks,
-                    sum(clickers) AS clickers,
-                    sum(opens) AS opens,
-                    sum(openers) AS openers,
-                    sum(unsubs) AS unsubs,
-
-                    argMax(ca, updated_at) AS ca
-
-                FROM {self.table}
-                WHERE database_id = %(db_id)s
-
-                GROUP BY
-                    database_id,
-                    dwh_id,
-                    adv_id,
-                    id_routers,
-                    tag_id,
-                    age_gender_isp,
-                    date_schedule_max,
-                    date_event
-            )
-
-            GROUP BY
-                database_id,
-                adv_id,
-                id_routers,
-                tag_id,
-                age_range,
-                gender,
-                main_isp,
-                brand,
-                optimized,
-                subject,
-                dep,
-                comment,
-                date_schedule
+           SELECT
+            adv_id,
+            database_id,
+            gender,
+            age_range,
+            main_isp,
+            dep AS departement,
+            any(id_routers)        AS id_routers,
+            any(tag_id)            AS tag_id,
+            any(brand)             AS brand,
+            any(optimized)         AS optimized,
+            any(subject)           AS subject,
+            any(comment)           AS comment,
+            any(date_schedule)     AS date_schedule,
+            sum(sends)     AS sends,
+            sum(clicks)    AS clicks,
+            sum(clickers)  AS clickers,
+            sum(opens)     AS opens,
+            sum(openers)   AS openers,
+            sum(unsubs)    AS unsubs,
+            max(ca) AS ca,
+            groupUniqArray(segmentId) AS segmentId
+        FROM {self.table}
+        WHERE database_id = %(db_id)s
+        GROUP BY
+            adv_id,
+            database_id,
+            gender,
+            age_range,
+            main_isp,
+            dep
         """
         rows = self._execute_query(query, {"db_id": db_id})
         if not rows:
@@ -501,6 +424,17 @@ class Query2:
                 if (b["name"], b["id_routers"], b["tag_id"]) == brand_key),
                 None
             )
+            segmentids = r.get("segmentId") or []
+
+            if isinstance(segmentids, str):
+                segmentids = [segmentids]
+            elif isinstance(segmentids, int):
+                segmentids = [segmentids]
+            elif segmentids is None:
+                segmentids = []
+            elif not isinstance(segmentids, list):
+                segmentids = list(segmentids)
+
             if not brand:
                 brand = {
                     "name": r["brand"],
@@ -509,7 +443,9 @@ class Query2:
                     "creativities": r.get("optimized") or "",
                     "comment": (r.get("comment") or "").replace("None", ""),
                     "subject": r["subject"],
-                    "segment_id": (r.get("segmentId") or [None])[0] if isinstance(r.get("segmentId"), list) else r.get("segmentId"),
+
+                    "segment_id": list(set(segmentids)),
+
                     "date_schedule": r.get("date_schedule"),
                     "sends": 0,
                     "clicks": 0,
@@ -519,8 +455,12 @@ class Query2:
                     "unsubs": 0,
                     "ca": 0,
                     "dimensions": {"age_range": {}, "gender": {}, "isp": {}}
-                }   
+                }
+
                 adv["brands"].append(brand)
+            existing = set(brand.get("segment_id") or [])
+            new_segments = set(segmentids)
+            brand["segment_id"] = list(existing | new_segments)
             brand["sends"] += sends
             brand["clicks"] += clicks
             brand["clickers"] += clickers
@@ -529,7 +469,12 @@ class Query2:
             brand["unsubs"] += unsubs
 
             brand["ca"] = max(brand["ca"], ca)
-
+            brand["ca"] = max(brand["ca"], ca)
+            brand["taux_clickers"] = round(brand["clickers"] / brand["sends"] * 100, 5) if brand["sends"] else 0
+            brand["taux_openers"] = round(brand["opens"] / brand["sends"] * 100, 5) if brand["sends"] else 0
+            brand["taux_unsubs"] = round(brand["unsubs"] / brand["sends"] * 100, 5) if brand["sends"] else 0
+            brand["taux_cto"] = round(brand["clickers"] / brand["opens"] * 100, 5) if brand["opens"] else 0
+            brand["ecpm"] = round(brand["ca"] / brand["sends"] * 1000, 3) if brand["sends"] else 0
             push_dim(brand, "age_range", r["age_range"], sends, clicks, clickers, opens, openers, unsubs)
             push_dim(brand, "gender", r["gender"], sends, clicks, clickers, opens, openers, unsubs)
             push_dim(brand, "isp", r["main_isp"], sends, clicks, clickers, opens, openers, unsubs)
