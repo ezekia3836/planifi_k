@@ -15,7 +15,7 @@ class Query2:
     def __init__(self):
         self.clk = ClickHouseConfig().getClient_prod()
         self.analyze = analyse()
-        self.table = "dev_reporting"
+        self.table = "prod_reporting"
         self.segment_index = self.build_segment_index()
     
     def _execute_query(self, query,params=None):

@@ -507,7 +507,7 @@ class reporting:
         df["subject"] = df["subject"].fillna("O_objet").astype("string")
         df["ca"] = df["ca"].fillna(0.0).astype(float)  
         df["date_event"] = pd.to_datetime( df["date_event"], errors="coerce").fillna(datetime.now())
-        self.clk.insert_df("dev_reporting", df)
+        self.clk.insert_df("prod_reporting", df)
         """file_path = "temp.csv"
         import os
         df.to_csv(
