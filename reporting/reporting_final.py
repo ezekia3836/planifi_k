@@ -426,7 +426,7 @@ class reporting:
         df["sends"] = (event == "Sends").astype("int8")
         df["opens"] = (event == "Opens").astype("int8")
         df["clicks"] = (event == "Clicks").astype("int8")
-        df["removals"] = (event == "Removals").astype("int8")
+        df["unsubs"] = (event == "Removals").astype("int8")
         df["complaints"] = (event == "Complaints").astype("int8")
         df["bounces"] = (event == "Bounces").astype("int8")
         key_cols = ["adv_id", "id_routers", "dwh_id"]
