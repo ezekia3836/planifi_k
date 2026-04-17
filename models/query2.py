@@ -15,7 +15,7 @@ class Query2:
     def __init__(self):
         self.clk = ClickHouseConfig().getClient_prod()
         self.analyze = analyse()
-        self.table = "prod_reporting"
+        self.table = "dev_reporting"
         self.segment_index = self.build_segment_index()
     
     def _execute_query(self, query,params=None):
@@ -113,7 +113,9 @@ class Query2:
             sum(openers)   AS openers,
             sum(unsubs)    AS unsubs,
             max(ca) AS ca,
-            groupUniqArray(segmentId) AS segmentId
+            groupUniqArray(segmentId) AS segmentId,
+            groupUniqArray(ListId) AS ListId,
+            groupUniqArray(ListName) AS ListName
         FROM {self.table}
         WHERE adv_id = %(adv_id)s
         GROUP BY
@@ -179,8 +181,9 @@ class Query2:
                 if (b["name"], b["id_routers"], b["tag_id"]) == brand_key),
                 None
             )
+            listid = r.get("ListId") or []
+            listName = r.get("ListName") or []
             segmentids = r.get("segmentId") or []
-
             if isinstance(segmentids, str):
                 segmentids = [segmentids]
             elif isinstance(segmentids, int):
@@ -189,6 +192,8 @@ class Query2:
                 segmentids = []
             elif not isinstance(segmentids, list):
                 segmentids = list(segmentids)
+            segmentids = [s for s in segmentids if s not in (0,"0","",None)]
+                
             if not brand:
                 brand = {
                     "name": r["brand"],
@@ -198,6 +203,8 @@ class Query2:
                     "comment": (r.get("comment") or "").replace("None", ""),
                     "subject": r["subject"],
                     "segment_id": list(set(segmentids)),
+                    "ListId":list(set(listid)),
+                    "ListName": list(set(listName)),
                     "date_schedule": r.get("date_schedule"),
                     "sends": 0,
                     "clicks": 0,
@@ -368,7 +375,9 @@ class Query2:
             sum(openers)   AS openers,
             sum(unsubs)    AS unsubs,
             max(ca) AS ca,
-            groupUniqArray(segmentId) AS segmentId
+            groupUniqArray(segmentId) AS segmentId,
+            groupUniqArray(ListId) AS ListId,
+            groupUniqArray(ListName) AS ListName
         FROM {self.table}
         WHERE database_id = %(db_id)s
         GROUP BY
@@ -424,8 +433,9 @@ class Query2:
                 if (b["name"], b["id_routers"], b["tag_id"]) == brand_key),
                 None
             )
+            listid = r.get("ListId") or []
+            listname = r.get("ListName") or []
             segmentids = r.get("segmentId") or []
-
             if isinstance(segmentids, str):
                 segmentids = [segmentids]
             elif isinstance(segmentids, int):
@@ -434,7 +444,7 @@ class Query2:
                 segmentids = []
             elif not isinstance(segmentids, list):
                 segmentids = list(segmentids)
-
+            segmentids = [s for s in segmentids if s not in (0,"0","",None)]
             if not brand:
                 brand = {
                     "name": r["brand"],
@@ -443,9 +453,9 @@ class Query2:
                     "creativities": r.get("optimized") or "",
                     "comment": (r.get("comment") or "").replace("None", ""),
                     "subject": r["subject"],
-
                     "segment_id": list(set(segmentids)),
-
+                    "ListId":list(set(listid)),
+                    "ListName": list(set(listname)),
                     "date_schedule": r.get("date_schedule"),
                     "sends": 0,
                     "clicks": 0,
@@ -467,7 +477,6 @@ class Query2:
             brand["opens"] += opens
             brand["openers"] += openers
             brand["unsubs"] += unsubs
-            brand["ca"] = max(brand["ca"], ca)
             brand["ca"] = max(brand["ca"], ca)
             brand["taux_clickers"] = round(brand["clickers"] / brand["sends"] * 100, 5) if brand["sends"] else 0
             brand["taux_openers"] = round(brand["opens"] / brand["sends"] * 100, 5) if brand["sends"] else 0
@@ -678,9 +687,9 @@ class Query2:
         query = f"""
         WITH advertisers AS (
             SELECT
-                r.database_id,
-                r.adv_id,
+                r.brand,
                 r.id_routers,
+                r.database_id,
                 SUM(r.sends)    AS sends,
                 SUM(r.clicks)   AS clicks,
                 SUM(r.clickers) AS clickers,
@@ -690,7 +699,7 @@ class Query2:
             FROM {self.table} r
             {join_clause}
             {where_clause}
-            GROUP BY r.database_id, r.adv_id, r.id_routers
+            GROUP BY r.brand, r.id_routers,r.database_id
         )
         SELECT
             a.database_id,

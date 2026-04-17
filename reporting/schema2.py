@@ -28,6 +28,8 @@ class BrandItem(BaseModel):
     creativities: str
     subject: str
     segment_id: List[int] = Field(default_factory=list)
+    ListId: List[int] = Field(default_factory=list)
+    ListName:List[str] = Field(default_factory=list)
     comment: str
     date_schedule: List[date] = Field(default_factory=list)
     sends: int = 0
