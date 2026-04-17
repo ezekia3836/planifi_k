@@ -93,38 +93,45 @@ class Query2:
             }
         query = f"""
             SELECT
-            adv_id,
-            database_id,
-            gender,
-            age_range,
-            main_isp,
-            dep AS departement,
-            any(id_routers)        AS id_routers,
-            any(tag_id)            AS tag_id,
-            any(brand)             AS brand,
-            any(optimized)         AS optimized,
-            any(subject)           AS subject,
-            any(comment)           AS comment,
-            any(date_schedule)     AS date_schedule,
-            sum(sends)     AS sends,
-            sum(clicks)    AS clicks,
-            sum(clickers)  AS clickers,
-            sum(opens)     AS opens,
-            sum(openers)   AS openers,
-            sum(unsubs)    AS unsubs,
-            max(ca) AS ca,
-            groupUniqArray(segmentId) AS segmentId,
-            groupUniqArray(ListId) AS ListId,
-            groupUniqArray(ListName) AS ListName
-        FROM {self.table}
-        WHERE adv_id = %(adv_id)s
-        GROUP BY
-            adv_id,
-            database_id,
-            gender,
-            age_range,
-            main_isp,
-            dep
+    adv_id,
+    database_id,
+    id_routers,
+    tag_id,
+    brand,
+    optimized,
+    subject,
+    comment,
+    date_schedule,
+    gender,
+    age_range,
+    main_isp,
+    dep AS departement,
+    sum(sends) AS sends,
+    sum(clicks) AS clicks,
+    sum(clickers) AS clickers,
+    sum(opens) AS opens,
+    sum(openers) AS openers,
+    sum(unsubs) AS unsubs,
+    max(ca) AS ca,
+    groupUniqArray(segmentId) AS segmentId,
+    groupUniqArray(ListId) AS ListId,
+    groupUniqArray(ListName) AS ListName
+FROM {self.table}
+WHERE adv_id = %(adv_id)s
+GROUP BY
+    adv_id,
+    database_id,
+    id_routers,
+    tag_id,
+    brand,
+    optimized,
+    subject,
+    comment,
+    date_schedule,
+    gender,
+    age_range,
+    main_isp,
+    dep
         """
         rows = self._execute_query(query, {"adv_id": adv_id})
 
@@ -355,38 +362,45 @@ class Query2:
             }
         query = f"""
            SELECT
-            adv_id,
-            database_id,
-            gender,
-            age_range,
-            main_isp,
-            dep AS departement,
-            any(id_routers)        AS id_routers,
-            any(tag_id)            AS tag_id,
-            any(brand)             AS brand,
-            any(optimized)         AS optimized,
-            any(subject)           AS subject,
-            any(comment)           AS comment,
-            any(date_schedule)     AS date_schedule,
-            sum(sends)     AS sends,
-            sum(clicks)    AS clicks,
-            sum(clickers)  AS clickers,
-            sum(opens)     AS opens,
-            sum(openers)   AS openers,
-            sum(unsubs)    AS unsubs,
-            max(ca) AS ca,
-            groupUniqArray(segmentId) AS segmentId,
-            groupUniqArray(ListId) AS ListId,
-            groupUniqArray(ListName) AS ListName
-        FROM {self.table}
-        WHERE database_id = %(db_id)s
-        GROUP BY
-            adv_id,
-            database_id,
-            gender,
-            age_range,
-            main_isp,
-            dep
+        adv_id,
+        database_id,
+        id_routers,
+        tag_id,
+        brand,
+        optimized,
+        subject,
+        comment,
+        date_schedule,
+        gender,
+        age_range,
+        main_isp,
+        dep AS departement,
+        sum(sends) AS sends,
+        sum(clicks) AS clicks,
+        sum(clickers) AS clickers,
+        sum(opens) AS opens,
+        sum(openers) AS openers,
+        sum(unsubs) AS unsubs,
+        max(ca) AS ca,
+        groupUniqArray(segmentId) AS segmentId,
+        groupUniqArray(ListId) AS ListId,
+        groupUniqArray(ListName) AS ListName
+    FROM {self.table}
+    WHERE database_id = %(db_id)s
+    GROUP BY
+        adv_id,
+        database_id,
+        id_routers,
+        tag_id,
+        brand,
+        optimized,
+        subject,
+        comment,
+        date_schedule,
+        gender,
+        age_range,
+        main_isp,
+        dep
         """
         rows = self._execute_query(query, {"db_id": db_id})
         if not rows:
@@ -499,7 +513,7 @@ class Query2:
                 stats["taux_openers"] = round(stats.get("openers", 0) / total_sends * 100, 4) if total_sends else 0
                 stats["taux_unsubs"] = round(stats.get("unsubs", 0) / total_sends * 100, 4) if total_sends else 0
         for adv in advertisers.values():
-            adv["ca"] = sum(b["ca"] for b in adv["brands"])
+            adv["ca"] = max((b["ca"] for b in adv["brands"]), default=0)
         total["ca"] = sum(
             adv["ca"]
             for adv in advertisers.values()
