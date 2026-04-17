@@ -259,7 +259,7 @@ GROUP BY
 
 
         for base in bases.values():
-            base["ca"] = sum(b["ca"] for b in base["brands"])
+            base["ca"] = max((b["ca"] for b in base["brands"]), default=0)
 
         total["ca"] = sum(
             b["ca"]
