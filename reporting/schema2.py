@@ -23,7 +23,7 @@ class Dimensions(BaseModel):
 
 class BrandItem(BaseModel):
     name: str
-    id_routers: str
+    id_routers: List[int] = Field(default_factory=list)
     tag_id: int
     creativities: str
     subject: str

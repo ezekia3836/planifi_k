@@ -33,7 +33,7 @@ GROUP_COLS = [
 COLUMNS_FINAL = [
     "database_id", "dwh_id",
     "country", "segmentId", "subject", "brand", "tag_id",
-    "adv_id", "id_routers", "affiliate_id", "ListId","ListName", "zipcode", "dep",
+    "adv_id", "id_routers","id_focus", "affiliate_id", "ListId","ListName", "zipcode", "dep",
     "sends", "opens", "openers", "clicks", "clickers", "unsubs","complaints",
     "bounces","age_range", "gender", "main_isp", "age_gender_isp", "ca",
     "date_schedule", "date_event", "optimized","comment","date_schedule_max", "updated_at",
@@ -41,7 +41,7 @@ COLUMNS_FINAL = [
 INT_COLS = [
     "database_id", "segmentId", "tag_id", "adv_id", "sends", "opens",
     "openers", "clicks", "clickers", "unsubs","complaints","bounces","ListId",
-    "affiliate_id", "country",
+    "affiliate_id", "country","id_focus"
 ]
 STR_COLS = [
     "id_routers", "age_range", "gender", "main_isp",
@@ -138,7 +138,7 @@ class reporting:
                             if id_r is None:
                                 continue
                             pg_map[str(id_r)] = {
-                                "id_focus": str(id_focus),
+                                "id_focus": id_focus,
                                 "ca": ca,
                                 "comment" : comment,
                                 "date_schedule": date_schedule or [],
@@ -171,10 +171,10 @@ class reporting:
         affiliate_id
     FROM prod_events
     PREWHERE MessageId IN ({",".join(map(str, id_routers_focus))})
-    WHERE Date BETWEEN '{date_start}' AND '{date_end}'
+    AND adv_id!=0
+    WHERE Date BETWEEN '{date_start}' AND '{date_end}' 
     ORDER BY MessageId, Date
         """
-
         try:
             r = self.resilient_call(self.clk.query, query)
             for row in r.result_rows:
@@ -393,7 +393,6 @@ class reporting:
                                 self.clean_cache(max_size=300_000)
                                 rows.clear()
                                 gc.collect()
-                               
                 if rows:
                     self._process_batch(rows)
                     rows.clear()
@@ -434,7 +433,6 @@ class reporting:
         mask = event == "Clicks"
         if mask.any():
             df.loc[mask, "clickers"] = (~df.loc[mask].duplicated(key_cols)).astype("int8")
-
         df["openers"] = 0
         mask = event == "Opens"
         if mask.any():
