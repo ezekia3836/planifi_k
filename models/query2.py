@@ -339,7 +339,7 @@ class Query2:
             "bases": sorted(result, key=lambda x: (x["clickers"], x["ecpm"]), reverse=True)
         }
         
-    def global_base(self, db_id):
+    def global_base(self,db_id):
         def compute_rates(sends, openers, clickers, unsubs):
             return (
                 round(clickers / sends * 100, 3) if sends else 0,
@@ -347,6 +347,7 @@ class Query2:
                 round(unsubs / sends * 100, 3) if sends else 0,
                 round(clickers / openers * 100, 3) if openers else 0
             )
+
         def push_dim(target, dim, value, sends, clicks, clickers, opens, openers, unsubs):
             if not value:
                 return
@@ -379,94 +380,97 @@ class Query2:
                 "taux_cto": self.analyze.analyze_cto_rate(cto, seg["openers"]),
                 "taux_unsubs": self.analyze.analyze_unsub_rate(tu)
             }
+
         query = f"""
             WITH ca_by_focus AS (
-        SELECT
-            id_focus,
-            max(ca) AS ca
-        FROM {self.table}
-        WHERE database_id = %(db_id)s
-        GROUP BY id_focus
-    )
-    SELECT
-        t.adv_id,
-        t.database_id,
-        t.id_routers,
-        t.tag_id,
-        t.brand,
-        t.optimized,
-        t.subject,
-        t.comment,
-        t.date_schedule,
-        t.gender,
-        t.age_range,
-        t.main_isp,
-        t.id_focus,
-        t.dep AS departement,
-        sum(t.sends)    AS sends,
-        sum(t.clicks)   AS clicks,
-        sum(t.clickers) AS clickers,
-        sum(t.opens)    AS opens,
-        sum(t.openers)  AS openers,
-        sum(t.unsubs)   AS unsubs,
-        any(f.ca)       AS ca,
-        groupUniqArray(t.segmentId) AS segmentId,
-        groupUniqArray(t.ListId)    AS ListId,
-        groupUniqArray(t.ListName)  AS ListName
-    FROM {self.table} t
-    LEFT JOIN ca_by_focus f ON f.id_focus = t.id_focus
-    WHERE t.database_id = %(db_id)s
-    GROUP BY
-        t.adv_id, t.database_id, t.id_routers, t.tag_id,
-        t.brand, t.optimized, t.subject, t.comment, t.date_schedule,
-        t.gender, t.age_range, t.main_isp, t.id_focus, t.dep
+                SELECT
+                    id_focus,
+                    max(ca) AS ca
+                FROM {self.table}
+                WHERE database_id = %(db_id)s
+                GROUP BY id_focus
+            )
+            SELECT
+                t.database_id,
+                t.adv_id,
+                t.id_routers,
+                t.tag_id,
+                t.brand,
+                t.optimized,
+                t.subject,
+                t.comment,
+                t.date_schedule,
+                t.gender,
+                t.age_range,
+                t.main_isp,
+                t.id_focus,
+                t.dep AS departement,
+                sum(t.sends)    AS sends,
+                sum(t.clicks)   AS clicks,
+                sum(t.clickers) AS clickers,
+                sum(t.opens)    AS opens,
+                sum(t.openers)  AS openers,
+                sum(t.unsubs)   AS unsubs,
+                max(f.ca)       AS ca,
+                groupUniqArray(t.segmentId) AS segmentId,
+                groupUniqArray(t.ListId)    AS ListId,
+                groupUniqArray(t.ListName)  AS ListName
+            FROM {self.table} t
+            LEFT JOIN ca_by_focus f ON f.id_focus = t.id_focus
+            WHERE t.database_id = %(db_id)s
+            GROUP BY
+                t.adv_id, t.database_id, t.id_routers, t.tag_id,
+                t.brand, t.optimized, t.subject, t.comment, t.date_schedule,
+                t.gender, t.age_range, t.main_isp, t.id_focus, t.dep
         """
         rows = self._execute_query(query, {"db_id": db_id})
         if not rows:
             return {"database_id": str(db_id), "globales": {}, "advertisers": []}
+
         advertisers = {}
-        analyse_dep = {}    
-        total = dict(sends=0, clicks=0, clickers=0, opens=0, openers=0, unsubs=0, ca=0)
+        analyse_dep = {}
+        total = dict(sends=0, clicks=0, clickers=0, opens=0, openers=0, unsubs=0)
+        seen_focus = {} 
+        result = []   
+
         for r in rows:
-            adv = advertisers.setdefault(r["adv_id"], {
-                "advertiser_id": r["adv_id"],
+
+            adv_id = r.get("adv_id") or "unknown"
+
+            advertiser = advertisers.setdefault(adv_id, {
+                "advertiser_id": adv_id,
+                "subject": r["subject"],
                 "sends": 0, "clicks": 0, "clickers": 0,
                 "opens": 0, "openers": 0, "unsubs": 0,
-                "brands": [],
+                "brands": {},
                 "dimensions": {"age_range": {}, "gender": {}, "isp": {}}
             })
+
             sends = r["sends"] or 0
             clicks = r["clicks"] or 0
             clickers = r["clickers"] or 0
-            opens = r["opens"] or 0 
+            opens = r["opens"] or 0
             openers = r["openers"] or 0
             unsubs = r["unsubs"] or 0
-            
-            adv["sends"] += sends
-            adv["clicks"] += clicks
-            adv["clickers"] += clickers
-            adv["opens"] += opens
-            adv["openers"] += openers
-            adv["unsubs"] += unsubs
-            push_dim(adv, "age_range", r["age_range"], sends, clicks, clickers, opens, openers, unsubs)
-            push_dim(adv, "gender", r["gender"], sends, clicks, clickers, opens, openers, unsubs)
-            push_dim(adv, "isp", r["main_isp"], sends, clicks, clickers, opens, openers, unsubs)
 
-            dep = r.get("departement") or "others"
-            if dep == "dep_vide":
-                dep = "others"
-            d = analyse_dep.setdefault(dep, {"sends": 0,"clickers": 0, "openers": 0, "unsubs": 0})
-            d["sends"] += sends
-            d["clickers"] += clickers
-            d["openers"] += openers
-            d["unsubs"] += unsubs
+            advertiser["sends"] += sends
+            advertiser["clicks"] += clicks
+            advertiser["clickers"] += clickers
+            advertiser["opens"] += opens
+            advertiser["openers"] += openers
+            advertiser["unsubs"] += unsubs
+
+            push_dim(advertiser, "age_range", r["age_range"], sends, clicks, clickers, opens, openers, unsubs)
+            push_dim(advertiser, "gender", r["gender"], sends, clicks, clickers, opens, openers, unsubs)
+            push_dim(advertiser, "isp", r["main_isp"], sends, clicks, clickers, opens, openers, unsubs)
+
+            # 👉 BRAND
             brand_key = (r["brand"], r["tag_id"])
-            brands_map = adv["brands"]
-            
-           
+            brands_map = advertiser["brands"]
+
             if brand_key not in brands_map:
-                brands_map[brand_key]={
-                  "name": r["brand"],
+                brands_map[brand_key] = {
+                    "name": r["brand"],
                     "id_routers": set(),
                     "tag_id": r["tag_id"],
                     "creativities": r.get("optimized") or "",
@@ -490,21 +494,24 @@ class Query2:
             brand = brands_map[brand_key]
             brand["id_routers"].add(r["id_routers"])
             segmentids = r.get("segmentId") or []
-            if isinstance(segmentids,(int,list)):
-                segmentids=[segmentids]
+            if isinstance(segmentids, (int, str)):
+                segmentids = [segmentids]
+
             brand["segment_id"].update(s for s in segmentids if s not in (0, "0", "", None))
             brand["ListId"].update(r.get("ListId") or [])
             brand["ListName"].update(r.get("ListName") or [])
-            
             brand["sends"] += sends
             brand["clicks"] += clicks
             brand["clickers"] += clickers
             brand["opens"] += opens
             brand["openers"] += openers
             brand["unsubs"] += unsubs
+
             push_dim(brand, "age_range", r["age_range"], sends, clicks, clickers, opens, openers, unsubs)
             push_dim(brand, "gender", r["gender"], sends, clicks, clickers, opens, openers, unsubs)
             push_dim(brand, "isp", r["main_isp"], sends, clicks, clickers, opens, openers, unsubs)
+
+            # 👉 CA UNIQUE PAR FOCUS
             id_focus = r.get("id_focus")
             ca = r.get("ca") or 0
 
@@ -512,40 +519,96 @@ class Query2:
                 brand["_ca_focus"][id_focus] = ca
                 brand["ca"] += ca
 
-            dep = r.get("departement") or "others"
-            if dep == "dep_vide":
-                dep = "others"
+            # 👉 CA GLOBAL FIX
+            if id_focus and id_focus not in seen_focus:
+                seen_focus[id_focus] = ca
 
-            d = analyse_dep.setdefault(dep, {"sends": 0, "clickers": 0, "openers": 0, "unsubs": 0})
-            d["sends"] += sends
-            d["clickers"] += clickers
-            d["openers"] += openers
-            d["unsubs"] += unsubs
-
+            # 👉 GLOBAL
             total["sends"] += sends
             total["clicks"] += clicks
             total["clickers"] += clickers
             total["opens"] += opens
             total["openers"] += openers
             total["unsubs"] += unsubs
+        for advertiser in advertisers.values():
 
-            result =[]
-            for ad in adv.values():
-                brand_list = []
-                for brand in adv["brands"].values():
-                    tc,to,tu,cto=compute_rates(
-                        brand["sends"],brand["openers"],brand["clickers"],brand["unsubs"]
-                    )
-                    brand["taux_clickers"] = tc
-                    brand["taux_openers"] = to
-                    brand["taux_unsubs"] = tu
-                    brand["taux_cto"] = cto
-                    brand["ecpm"] = round(brand["ca"] / brand["sends"] * 1000, 3) if brand["sends"] else 0
-                    brand["id_routers"] = list(brand["id_routers"])
-                    brand["segment_id"] = list(brand["segment_id"])
-                    brand["ListId"] = list(brand["ListId"])
-                    brand["ListName"] = list(brand["ListName"])
+            brands_list = []
 
+            for brand in advertiser["brands"].values():
+
+                tc, to, tu, cto = compute_rates(
+                    brand["sends"], brand["openers"], brand["clickers"], brand["unsubs"]
+                )
+
+                brand["taux_clickers"] = tc
+                brand["taux_openers"] = to
+                brand["taux_unsubs"] = tu
+                brand["taux_cto"] = cto
+                brand["ecpm"] = round(brand["ca"] / brand["sends"] * 1000, 3) if brand["sends"] else 0
+
+                brand["id_routers"] = list(brand["id_routers"])
+                brand["segment_id"] = list(brand["segment_id"])
+                brand["ListId"] = list(brand["ListId"])
+                brand["ListName"] = list(brand["ListName"])
+
+                brands_list.append(brand)
+
+            advertiser["brands"] = brands_list
+
+            advertiser["ca"] = sum(
+                sum(b["_ca_focus"].values()) for b in brands_list
+            )
+
+            for b in brands_list:
+                b.pop("_ca_focus", None)
+
+            tc, to, tu, cto = compute_rates(
+                advertiser["sends"], advertiser["openers"], advertiser["clickers"], advertiser["unsubs"]
+            )
+
+            ecpm = round(advertiser["ca"] / advertiser["sends"] * 1000, 3) if advertiser["sends"] else 0
+
+            result.append({
+                "advertiser_id": advertiser["advertiser_id"],
+                "brands": brands_list,
+                "sends": advertiser["sends"],
+                "clicks": advertiser["clicks"],
+                "clickers": advertiser["clickers"],
+                "opens": advertiser["opens"],
+                "openers": advertiser["openers"],
+                "unsubs": advertiser["unsubs"],
+                "taux_clickers": tc,
+                "taux_openers": to,
+                "taux_unsubs": tu,
+                "taux_cto": cto,
+                "ecpm": ecpm,
+                "ca": advertiser["ca"],
+                "classification": self.analyze.classify_advertiser(ecpm, tc),
+                "dimensions": advertiser["dimensions"]
+            })
+
+        # 👉 CA GLOBAL FINAL
+        total["ca"] = sum(seen_focus.values())
+
+        tc_g, to_g, tu_g, cto_g = compute_rates(
+            total["sends"], total["openers"], total["clickers"], total["unsubs"]
+        )
+
+        ecpm_g = round(total["ca"] / total["sends"] * 1000, 3) if total["sends"] else 0
+
+        return {
+            "database_id": str(db_id),
+            "globales": {
+                **total,
+                "ecpm": ecpm_g,
+                "taux_clickers": tc_g,
+                "taux_openers": to_g,
+                "taux_unsubs": tu_g,
+                "taux_cto": cto_g,
+                "analyse_dep": analyse_dep
+            },
+            "advertisers": sorted(result, key=lambda x: (x["clickers"], x["ecpm"]), reverse=True)
+        }
     def all_advertisers(self, date_schedule=None, date_start=None, date_end=None):
         conditions = []
         if date_schedule:
@@ -580,12 +643,11 @@ class Query2:
             FROM (
                 SELECT 
                     adv_id,
-                    id_routers,
-                    database_id,
+                    id_focus,
                     MAX(ca) AS ca
                 FROM {self.table} r
                 {where_clause}
-                GROUP BY adv_id, id_routers, database_id
+                GROUP BY adv_id, id_focus
             )
             GROUP BY adv_id
         )
@@ -679,40 +741,58 @@ class Query2:
         if conditions:
             where_clause += " AND " + " AND ".join(conditions)
         query = f"""
-        WITH advertisers AS (
+            WITH stats AS (
             SELECT
-                r.brand,
-                r.id_routers,
                 r.database_id,
                 SUM(r.sends)    AS sends,
                 SUM(r.clicks)   AS clicks,
                 SUM(r.clickers) AS clickers,
                 SUM(r.openers)  AS openers,
-                SUM(r.unsubs)   AS unsubs,
-                MAX(r.ca) AS ca
+                SUM(r.unsubs)   AS unsubs
             FROM {self.table} r
             {join_clause}
             {where_clause}
-            GROUP BY r.brand, r.id_routers,r.database_id
+            GROUP BY r.database_id
+        ),
+
+        ca_unique AS (
+            SELECT
+                database_id,
+                SUM(ca) AS ca_global
+            FROM (
+                SELECT
+                    database_id,
+                    id_focus,
+                    MAX(ca) AS ca
+                FROM {self.table} r
+                {join_clause}
+                {where_clause}
+                GROUP BY database_id, id_focus
+            )
+            GROUP BY database_id
         )
+
         SELECT
-            a.database_id,
+            s.database_id AS database_id,
             d.basename,
-            SUM(a.sends) AS sends,
-            SUM(a.clicks) AS clicks,
-            SUM(a.clickers) AS clickers,
-            SUM(a.openers) AS openers,
-            SUM(a.unsubs)  AS unsubs,
-            SUM(a.ca) AS ca_global,
-            ROUND(SUM(a.openers)  / NULLIF(SUM(a.sends),0) * 100, 3) AS taux_openers,
-            ROUND(SUM(a.clickers) / NULLIF(SUM(a.sends),0) * 100, 3) AS taux_clickers,
-            ROUND(SUM(a.clickers) / NULLIF(SUM(a.openers),0) * 100, 3) AS taux_cto,
-            ROUND(SUM(a.unsubs)   / NULLIF(SUM(a.sends),0) * 100, 3) AS taux_unsubs,
-            ROUND(SUM(a.ca) / NULLIF(SUM(a.sends),0) * 1000, 3) AS ecpm
-        FROM advertisers a
-        JOIN databases d ON a.database_id = d.id
-        GROUP BY a.database_id, d.basename
-        ORDER BY sends DESC
+            s.sends,
+            s.clicks,
+            s.clickers,
+            s.openers,
+            s.unsubs,
+            cu.ca_global AS ca_global,
+
+            ROUND(s.openers / NULLIF(s.sends,0) * 100, 3) AS taux_openers,
+            ROUND(s.clickers / NULLIF(s.sends,0) * 100, 3) AS taux_clickers,
+            ROUND(s.clickers / NULLIF(s.openers,0) * 100, 3) AS taux_cto,
+            ROUND(s.unsubs / NULLIF(s.sends,0) * 100, 3) AS taux_unsubs,
+            ROUND(cu.ca_global / NULLIF(s.sends,0) * 1000, 3) AS ecpm
+
+        FROM stats s
+        JOIN ca_unique cu ON s.database_id = cu.database_id
+        JOIN databases d ON d.id = s.database_id
+
+        ORDER BY s.sends DESC
         """
         rows = self._execute_query(query)
         result = []
@@ -725,7 +805,6 @@ class Query2:
             result.append({
                 "database_id": row["database_id"],
                 "database_name": row["basename"],
-
                 "globales": {
                     "sends": sends,
                     "openers": openers,
