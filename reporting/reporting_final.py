@@ -11,6 +11,8 @@ from dateutil.relativedelta import relativedelta
 import logging
 import os
 import gc
+from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 BATCH_ADV_SIZE = 5000
 BATCH_CONTACTS = 2_000
@@ -57,13 +59,53 @@ class reporting:
     def __init__(self):
         self.clk = ClickHouseConfig().getClient_prod()
         self.pg = PgConfig().get_client()
-        self.table = "prod_reporting"
+        self.table = "prod_reporting_test"
         self.adaptive_chunk = AdaptiveChunkManager()
         self.batch_adv_size = BATCH_ADV_SIZE
         self.konticrea = connect_kit()
         self.cache_contacts = {}
         self.ktk_id_cache = {}
         self.optimize_cache = {}
+  
+
+    def recupere_pg_optimized(self, date_start, date_end, batch=1000, max_workers=4):
+        start = datetime.strptime(date_start, "%Y-%m-%d")
+        end = datetime.strptime(date_end, "%Y-%m-%d")
+
+        final_map = {}
+
+        def process_day(day):
+            day_start = day.strftime("%Y-%m-%d")
+            day_end = (day + timedelta(days=1)).strftime("%Y-%m-%d")
+            return self._recupere_pg_single(day_start, day_end, batch)
+
+        days = []
+        current = start
+        while current <= end:
+            days.append(current)
+            current += timedelta(days=1)
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(process_day, d): d for d in days}
+
+            for future in as_completed(futures):
+                day = futures[future]
+                try:
+                    pg_map = future.result()
+                    if not pg_map:
+                        continue
+
+                    # 🔥 merge optimisé
+                    for key, value in pg_map.items():
+                        existing = final_map.get(key)
+
+                        if existing is None or (value["is_direct"] and not existing.get("is_direct")):
+                            final_map[key] = value
+
+                except Exception as e:
+                    self.notifier_erreur(f"Erreur jour {day} : {e}")
+
+        return final_map
 
     def resilient_call(self, func, *args, max_retry=5, sleep_sec=5, backoff=True, **kwargs):
         attempt, wait = 1, sleep_sec
@@ -99,42 +141,70 @@ class reporting:
         return list({str(x).strip() for x in adv_ids if str(x).strip().isdigit()})
 
     def recupere_pg(self, date_start, date_end, batch=1000):
+        query = text("""
+            WITH base AS (
+                SELECT
+                    vd.id          AS id_focus,
+                    vd.advertiser,
+                    vd.date_shedule,
+                    pa.caeur       AS ca,
+                    vd.comment
+                FROM visu.v2_data vd
+                JOIN visu.v2_status st ON st.id = vd.status
+                LEFT JOIN visu.v2_payoutinfo pa ON pa.id_data = vd.id
+                WHERE st.id = 5
+                AND vd.date_shedule BETWEEN :date_start AND :date_end
+            ),
+            routers AS (
+                -- ── directs : idsendout du focus lui-même
+                SELECT
+                    vd.id     AS id_focus,
+                    vd.idsendout,
+                    TRUE      AS is_direct
+                FROM visu.v2_data vd
+                -- ── filtre sur les focus de la base seulement
+                WHERE vd.id IN (SELECT id_focus FROM base)
+                AND vd.idsendout IS NOT NULL
 
-        query = text(f"""
-            SELECT vd.id AS id_focus,
-                pa.caeur AS ca,
-                vd.comment,
-                COALESCE(json_agg(DISTINCT vd.date_shedule), '[]'::json) AS date_schedule,
-                COALESCE(
-                    json_agg(DISTINCT jsonb_build_object('idsendout', idsendouts.idsendout, 'is_direct', idsendouts.is_direct)),
-                    '[]'::json
-                ) AS id_routers
-            FROM visu.v2_data vd
-            JOIN visu.v2_status st ON st.id = vd.status
-            LEFT JOIN visu.v2_payoutinfo pa ON pa.id_data = vd.id
-            LEFT JOIN LATERAL (
-                SELECT vd1.idsendout, vd1.is_direct FROM (
-                    SELECT vd.idsendout, TRUE AS is_direct
-                    UNION
-                    SELECT vd2.idsendout, FALSE AS is_direct
-                    FROM visu.v2_data vd2
-                    WHERE vd2.id = ANY (
-                        SELECT vdr2.id_reuse FROM visu.v2_data_reuse vdr2
-                        WHERE vdr2.id_v2 = vd.id
-                    )
-                    AND vd2.idsendout IS NOT NULL
-                ) AS vd1
-            ) AS idsendouts ON TRUE
-            WHERE st.id = 5
-            AND vd.date_shedule BETWEEN '{date_start}' AND '{date_end}'
-            GROUP BY vd.id, pa.caeur, vd.comment
+                UNION ALL
+
+                -- ── reuses : idsendout des campagnes réutilisées
+                SELECT
+                    vd.id     AS id_focus,
+                    vd2.idsendout,
+                    FALSE     AS is_direct
+                FROM visu.v2_data vd
+                JOIN visu.v2_data_reuse r  ON r.id_v2   = vd.id
+                JOIN visu.v2_data      vd2 ON vd2.id    = r.id_reuse
+                WHERE vd.id IN (SELECT id_focus FROM base)
+                AND vd2.idsendout IS NOT NULL
+            )
+            SELECT
+                b.id_focus,
+                b.advertiser,
+                MAX(b.ca)       AS ca,
+                MAX(b.comment)  AS comment,
+                json_agg(DISTINCT b.date_shedule ORDER BY b.date_shedule) AS date_schedule,
+                json_agg(DISTINCT jsonb_build_object(
+                    'idsendout', r.idsendout,
+                    'is_direct', r.is_direct
+                )) FILTER (WHERE r.idsendout IS NOT NULL) AS id_routers
+            FROM base b
+            LEFT JOIN routers r ON r.id_focus = b.id_focus
+            GROUP BY b.id_focus, b.advertiser
         """)
 
-        pg_map = {}
+        focus_cache = {}
+        pg_map = []
 
         try:
             with self.pg.connect() as conn:
-                result = conn.execution_options(stream_results=True).execute(query)
+                result = conn.execution_options(
+                    stream_results=True,
+                    yield_per=batch,
+                ).execute(query,
+                {"date_start":date_start, "date_end":date_end}
+                )
 
                 while True:
                     rows = result.fetchmany(batch)
@@ -142,67 +212,101 @@ class reporting:
                         break
 
                     for row in rows:
-                        id_focus, ca, comment, date_schedule, id_routers_list = row
+                        id_focus, advertiser, ca, comment, date_schedule, id_routers_list = row
 
+                        # =========================
+                        # focus cache (stable)
+                        # =========================
+                        if id_focus not in focus_cache:
+                            focus_cache[id_focus] = {
+                                "advertiser": advertiser,
+                                "ca": ca,
+                                "comment": comment,
+                                "date_schedule": date_schedule if isinstance(date_schedule, list) else [],
+                            }
+
+                        # =========================
+                        # 🔥 IMPORTANT : PAS DE GROUPING PAR id_router
+                        # =========================
                         if not id_routers_list:
                             continue
 
                         for item in id_routers_list:
-                            if not isinstance(item, dict):
-                                continue
-
                             id_r = item.get("idsendout")
-                            is_direct = item.get("is_direct", False)
-
                             if id_r is None:
                                 continue
 
-                            key = str(id_r)
-                            existing = pg_map.get(key)
-                            if existing is None or (is_direct and not existing.get("is_direct")):
-                                pg_map[key] = {
-                                    "id_focus": id_focus,
-                                    "ca": ca,
-                                    "comment": comment,
-                                    "date_schedule": date_schedule or [],
-                                    "is_direct": is_direct,
-                                }
+                            pg_map.append({
+                                "id_router": id_r,
+                                "id_focus": id_focus,
+                                "is_direct": item.get("is_direct", False)
+                            })
 
         except Exception as e:
             self.notifier_erreur(f"Erreur Focus : {e}")
             return {}
 
-        return pg_map
+        # =========================
+        # 🔥 RESULT FINAL = LIGNES DISTINCTES
+        # =========================
+        result = {}
 
-    def recupere_events(self, id_routers_focus, date_start, date_end):
+        for row in pg_map:
+            id_r = row["id_router"]
+            id_focus = row["id_focus"]
 
+            focus = focus_cache.get(id_focus)
+            if not focus:
+                continue
+
+            # clé unique = combinaison
+            key = (id_r, id_focus)
+
+            result[key] = {
+                "id_router": id_r,
+                "id_focus": id_focus,
+                "advertiser": focus["advertiser"],
+                "ca": focus["ca"],
+                "comment": focus["comment"],
+                "date_schedule": focus["date_schedule"],
+                "is_direct": row["is_direct"],
+            }
+
+        logger.info(f"Focus : {len(result)} rows")
+        return result
+
+    def recupere_events(self, id_routers_focus,date_start,date_end):
         if not id_routers_focus:
             return
 
+        end_dt = datetime.strptime(date_end, "%Y-%m-%d")
+        extended_end = (end_dt + timedelta(days=7)).strftime("%Y-%m-%d")
+
         query = f"""
-       SELECT
-        database_id,
-        MessageId AS id_routers,
-        adv_id,
-        dwh_id,
-        SegmentId AS segmentId,
-        MessageSubject AS subject,
-        event_type,
-        Date AS date_event,
-        tag AS tag_id,
-        brand,
-        client_id,
-        ListId,
-        ListName,
-        affiliate_id
-    FROM prod_events
-    WHERE
-        MessageId IN ({",".join(map(str, id_routers_focus))})
-        AND adv_id != 0
-        AND Date BETWEEN '{date_start}' AND '{date_end}'
+        SELECT
+            database_id,
+            MessageId AS id_routers,
+            adv_id,
+            dwh_id,
+            SegmentId AS segmentId,
+            MessageSubject AS subject,
+            event_type,
+            Date AS date_event,
+            tag AS tag_id,
+            brand,
+            client_id,
+            ListId,
+            ListName,
+            affiliate_id
+        FROM prod_events_2
+        WHERE
+            MessageId IN ({",".join(map(str, id_routers_focus))})
+            AND adv_id != 0 AND Date BETWEEN '{date_start}' AND '{extended_end}'
         """
+
         try:
             r = self.resilient_call(self.clk.query, query)
+
             for row in r.result_rows:
                 yield dict(zip(r.column_names, row))
 
@@ -374,7 +478,9 @@ class reporting:
             self.optimize_cache.clear()
    
     def report(self):
+
         self.clean_cache()
+
         def check_initialization():
             file = "etat.txt"
             if not os.path.exists(file):
@@ -392,47 +498,77 @@ class reporting:
 
         initialized = check_initialization()
         n_months = 2 if initialized else 3
+
         logger.info(f"Lancement {'régulier' if initialized else 'initial'} — {n_months} mois")
-        months = self.get_month_ranges(9,12,2025)
+
+        months = self.get_month_ranges(1, 1, 2026)
+
         success = True
+
         try:
             for date_start, date_end, partition in months:
-                logger.info(f"Traitement {date_start} à {date_end} (partition {partition})")
+
                 if initialized:
                     try:
-                        query = f"ALTER TABLE {self.table} DROP PARTITION IF EXISTS {partition}"
-                        self.clk.query(query)
+                        query = f"ALTER TABLE {self.table} DROP PARTITION {partition}"
+                        self.clk.command(query)
                         logger.info(f"Partition supprimée : {partition}")
                     except Exception as e:
                         logger.warning(f"Erreur DROP partition {partition} : {e}")
+
+                logger.info(f"Traitement {date_start} à {date_end}")
+
+                # =========================
+                # 🔥 1. DATA FOCUS
+                # =========================
                 data = self.recupere_pg(date_start, date_end)
+
                 if not data:
                     logger.warning(f"Pas de données pour {partition}")
                     continue
-                focus_map = {str(k): v for k, v in data.items()}
+
+                focus_map = data  # id_router → focus
                 router_ids = list(focus_map.keys())
-                rows=[]
-                for id_chunk in chunk_list(router_ids, 20):
-                        for row in self.recupere_events(id_chunk, date_start, date_end):
-                            focus = focus_map.get(str(row["id_routers"]))
-                            if not focus:
-                                continue
-                            merged = {**row, **focus}
-                            rows.append(merged)
-                            if len(rows) >= 50_000:
-                                self._process_batch(rows)
-                                self.clean_cache(max_size=300_000)
-                                rows.clear()
-                                gc.collect()
+
+                rows = []
+
+                for chunk in chunk_list(router_ids, 5):
+
+                    for row in self.recupere_events(chunk, date_start, date_end):
+
+                        # ✔ clé correcte = id_router
+                        focus = focus_map.get(row["id_router"])
+                        if not focus:
+                            continue
+
+                        row["id_focus"] = focus["id_focus"]
+                        row["ca"] = focus["ca"]
+                        row["comment"] = focus["comment"]
+                        row["date_schedule"] = focus["date_schedule"]
+                        row["is_direct"] = focus["is_direct"]
+
+                        rows.append(row)
+
+                        if len(rows) >= 10_000:
+                            self._process_batch(rows)
+                            rows.clear()
+                            self.clean_cache(max_size=200_000)
+                            gc.collect()
+
                 if rows:
                     self._process_batch(rows)
                     rows.clear()
                     gc.collect()
+
+                logger.info(f"[SUCCESS] Traitement terminé pour: {date_start} - {date_end}")
+
                 del focus_map, router_ids, data
                 gc.collect()
+
         except Exception as e:
             success = False
             logger.error(f"Erreur pipeline : {e}", exc_info=True)
+
         if success and not initialized:
             try:
                 with open("etat.txt", "w") as f:
@@ -442,88 +578,98 @@ class reporting:
                 logger.error(f"Erreur écriture état : {e}")
     
     def _process_batch(self, rows_batch, database_id=None):
-
-        if len(rows_batch) > 50_000:
+        if len(rows_batch) > 70_000:
             logger.warning(f"Batch trop gros: {len(rows_batch)}")
             return
-        df = pd.DataFrame(rows_batch, columns=NEED_COLS)
+        df = pd.DataFrame(rows_batch)
+        for col in NEED_COLS:
+            if col not in df.columns:
+                df[col] = None
         if df.empty:
             return
 
         if database_id is not None:
             df = df[df["database_id"] == database_id]
-
-        if df.empty:
-            return
-        df.to_csv("rows.csv",index=False,sep=';')
-        df["dwh_id"] = df["dwh_id"].astype("string").fillna("")
+            if df.empty:
+                return
         df["database_id"] = df["database_id"].astype(str)
-        event = df["event_type"].to_numpy()
-        df["sends"] = (event == "Sends").astype("int8")
-        df["opens"] = (event == "Opens").astype("int8")
-        df["clicks"] = (event == "Clicks").astype("int8")
-        df["unsubs"] = (event == "Removals").astype("int8")
-        df["complaints"] = (event == "Complaints").astype("int8")
-        df["bounces"] = (event == "Bounces").astype("int8")
+        df["dwh_id"] = df["dwh_id"].astype("string").fillna("")
+        df["event_type"] = df["event_type"].astype("string")
+
+        event = df["event_type"]
+
+        df["sends"] = event.eq("Sends").astype("int8")
+        df["opens"] = event.eq("Opens").astype("int8")
+        df["clicks"] = event.eq("Clicks").astype("int8")
+        df["unsubs"] = event.eq("Removals").astype("int8")
+        df["complaints"] = event.eq("Complaints").astype("int8")
+        df["bounces"] = event.eq("Bounces").astype("int8")
+
         key_cols = ["adv_id", "id_routers", "dwh_id"]
 
+        click_mask = event.eq("Clicks")
+        open_mask = event.eq("Opens")
+
         df["clickers"] = 0
-        mask = event == "Clicks"
-        if mask.any():
-            df.loc[mask, "clickers"] = (~df.loc[mask].duplicated(key_cols)).astype("int8")
-
         df["openers"] = 0
-        mask = event == "Opens"
-        if mask.any():
-            df.loc[mask, "openers"] = (~df.loc[mask].duplicated(key_cols)).astype("int8")
 
-        dwh_ids = df["dwh_id"].unique().tolist()
+        if click_mask.any():
+            tmp = df.loc[click_mask, key_cols]
+            df.loc[click_mask, "clickers"] = (~tmp.duplicated()).astype("int8").to_numpy()
+
+        if open_mask.any():
+            tmp = df.loc[open_mask, key_cols]
+            df.loc[open_mask, "openers"] = (~tmp.duplicated()).astype("int8").to_numpy()
+
+        dwh_ids = df["dwh_id"].unique()
         contacts_map = self.get_contacts_cached(dwh_ids)
 
-        df["age"] = df["dwh_id"].map(lambda x: contacts_map.get(x, {}).get("age"))
-        df["gender"] = df["dwh_id"].map(lambda x: contacts_map.get(x, {}).get("gender"))
-        df["main_isp"] = df["dwh_id"].map(lambda x: contacts_map.get(x, {}).get("main_isp"))
-        df["zipcode"] = df["dwh_id"].map(lambda x: contacts_map.get(x, {}).get("zipcode"))
-        df["dep"] = df["dwh_id"].map(lambda x: contacts_map.get(x, {}).get("dep"))
-        df["gender"] = df["gender"].fillna("O_gender").replace({"O": "O_gender"})
+        if contacts_map:
+            contact_df = pd.DataFrame.from_dict(contacts_map, orient="index")
+            contact_df.index.name = "dwh_id"
+            contact_df = contact_df.reset_index()
+            df = df.merge(contact_df, on="dwh_id", how="left")
+
+
+        for col, default in [("age", None), ("gender", "O_gender"),
+                            ("main_isp", "O_isp"), ("zipcode", "zipcode_vide"), ("dep", "dep_vide")]:
+            if col not in df.columns:
+                df[col] = default
+
+        df["gender"]   = df["gender"].fillna("O_gender").replace({"O": "O_gender"})
         df["main_isp"] = df["main_isp"].fillna("O_isp").replace({"Other": "O_isp"})
-        df["zipcode"] = df["zipcode"].fillna("zipcode_vide")
-        df["dep"] = df["dep"].fillna("dep_vide")
-
-        age = pd.to_numeric(df["age"], errors="coerce")
-
-        df["age_range"] = np.select(
-            [
-                age < 18,
-                age < 25,
-                age < 35,
-                age < 45,
-                age < 55,
-                age < 65,
-                age < 75,
-            ],
-            AGE_LABELS[:-1],
-            default="75+"
+        df["zipcode"]  = df["zipcode"].fillna("zipcode_vide")
+        df["dep"]      = df["dep"].fillna("dep_vide")
+        df["age_range"] = (
+            pd.cut(pd.to_numeric(df["age"], errors="coerce"),
+                bins=AGE_BINS,
+                labels=AGE_LABELS,
+                right=False)
+            .astype("string")
+            .fillna("O_age")
         )
-
         df["age_gender_isp"] = (
-            df["age_range"].astype(str) + "_" +
-            df["gender"].astype(str) + "_" +
-            df["main_isp"].astype(str)
+            df["age_range"].astype(str)
+            + "_"
+            + df["gender"].astype(str)
+            + "_"
+            + df["main_isp"].astype(str)
         )
-
-        database_ids = df["database_id"].unique().tolist()
+        database_ids = df["database_id"].unique()
         db_map = self.get_ktk_id_cached(database_ids)
 
-        df["ktk_id"] = df["database_id"].map(lambda x: db_map.get(x, {}).get("ktk_id"))
-        df["basename"] = df["database_id"].map(lambda x: db_map.get(x, {}).get("basename"))
-        df["country"] = df["database_id"].map(lambda x: db_map.get(x, {}).get("country"))
+        if db_map:
+            db_df = pd.DataFrame.from_dict(db_map, orient="index").reset_index()
+            db_df.rename(columns={"index": "database_id"}, inplace=True)
+            df = df.merge(db_df, on="database_id", how="left")
 
-        df["ktk_id"] = df["ktk_id"].fillna("ktk_vide")
-        df["basename"] = df["basename"].fillna("base_vide")
+        for col, default in [("ktk_id", "ktk_vide"), ("basename", "base_vide"), ("country", 0)]:
+            if col not in df.columns:
+                df[col] = default
+
+        df["ktk_id"]  = df["ktk_id"].fillna("ktk_vide")
+        df["basename"]= df["basename"].fillna("base_vide")
         df["country"] = df["country"].fillna(0)
-
-        df["optimized"] = "optimized_vide"
 
         try:
             optimize_params = df[["id_focus", "ktk_id"]].drop_duplicates()
@@ -532,13 +678,16 @@ class reporting:
                 optimize_params.to_dict("records")
             ) or {}
 
+            keys = list(zip(df["id_focus"].astype(str), df["ktk_id"].astype(str)))
+
             df["optimized"] = [
-                optimized_map.get((str(f), str(k)), "optimized_vide")
-                for f, k in zip(df["id_focus"], df["ktk_id"])
+                optimized_map.get(k, "optimized_vide")
+                for k in keys
             ]
 
         except Exception as e:
             logger.warning(f"Optimize indisponible: {e}")
+            df["optimized"] = "optimized_vide"
 
         if "date_schedule" not in df.columns:
             df["date_schedule"] = [[] for _ in range(len(df))]
@@ -546,36 +695,44 @@ class reporting:
         df["date_event"] = pd.to_datetime(df["date_event"], errors="coerce")
 
         df["date_schedule_max"] = df["date_schedule"].map(
-                lambda x: max(x) if isinstance(x, list) and x else None
-            )
+            lambda x: max(x) if isinstance(x, list) and x else None
+        )
+
         df["date_schedule_max"] = pd.to_datetime(df["date_schedule_max"], errors="coerce")
         df["updated_at"] = datetime.now()
+
         for col in COLUMNS_FINAL:
             if col not in df.columns:
                 df[col] = None
 
-        df = df[COLUMNS_FINAL]
+        df = df.reindex(columns=COLUMNS_FINAL, fill_value=None)
 
         for col in INT_COLS:
             if col in df:
-                df[col] = (
-                    pd.to_numeric(df[col], errors="coerce")
-                    .fillna(0)
-                    .astype(np.int32)
-                )
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(np.int32)
 
         for col in STR_COLS:
             if col in df:
                 df[col] = df[col].astype("string").fillna("")
 
-        df["dwh_id"] = df["dwh_id"].astype("string")
-        df["brand"] = df["brand"].astype("string").fillna("brand_vide")
-        df["subject"] = df["subject"].fillna("O_objet").astype("string")
         df["ca"] = df["ca"].fillna(0.0).astype(float)
+
         df["date_event"] = pd.to_datetime(df["date_event"], errors="coerce").fillna(datetime.now())
-        self.clk.insert_df("prod_reporting", df)
-        #df.to_csv("temps.csv",index=False,sep=';')
-        logger.info(f"Données traitées : {len(df)} lignes")
+
+
+        batch_size = 5000
+        n = len(df)
+
+        for start in range(0, n, batch_size):
+            end = start + batch_size
+            chunk = df[start:end]
+            try:
+                self.clk.insert_df(self.table, chunk)
+                # file_path = "temps.csv" 
+                # chunk.to_csv( file_path, mode='a', index=False, sep=';', header=not os.path.exists(file_path))
+                logger.info(f"[SUCCESS]")
+            except Exception as e:
+                logger.error(f"[ERROR] Insert {start}-{end}: {e}")
 
         del df
         gc.collect()

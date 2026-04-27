@@ -5,7 +5,7 @@ class data_auto:
     def __init__(self):
         self.clk = ClickHouseConfig().getClient_prod()
         self.analyse = analyse()
-        self.table = "prod_reporting"
+        self.table = "prod_reporting_test"
 
     def _execute_query(self,query,params=None):
         result = self.clk.query(query,parameters=params or {})
