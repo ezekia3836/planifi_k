@@ -58,3 +58,10 @@ def reload_index():
 @router.get("/test/{adv_id}")
 def get_test(adv_id):
     return test.get_data(adv_id)
+
+@router.get("/agences",summary="Liste des agences")
+def get_agences(agence_id: Optional[int]=None):    
+    return query.get_agences(agence_id=agence_id)
+@router.get("/tags",summary="Liste des tags")
+def get_tags(tags_id: Optional[int]=None):    
+    return query.get_tags(tags_id=tags_id)

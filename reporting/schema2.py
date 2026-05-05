@@ -20,17 +20,21 @@ class Dimensions(BaseModel):
     age_range: Dict[str, Any] = Field(default_factory=dict)
     gender: Dict[str, Any] = Field(default_factory=dict)
     isp: Dict[str, Any] = Field(default_factory=dict)
-
+class ModelItem(BaseModel):
+    model: str
+    payvalue: float | None = None
+    comment: str | None = None
 class BrandItem(BaseModel):
     name: str
     id_routers: List[int] = Field(default_factory=list)
     tag_id: int
+    agence: int
     creativities: str
     subject: str
+    models:List[ModelItem]=[]
     segment_id: List[int] = Field(default_factory=list)
     ListId: List[int] = Field(default_factory=list)
     ListName:List[str] = Field(default_factory=list)
-    comment: str
     date_schedule: List[date] = Field(default_factory=list)
     sends: int = 0
     clicks: int = 0
@@ -42,6 +46,9 @@ class BrandItem(BaseModel):
     taux_cto: float = 0.0
     taux_unsubs: float = 0.0
     taux_openers: float = 0.0
+    clicks_val:int=0
+    leads_val:int=0
+    volume_val:int=0
     ca: float = 0.0
     ecpm: float = 0.0
     dimensions: Dimensions = Field(default_factory=Dimensions)

@@ -2,6 +2,7 @@ from cron.p_contact import p_contact
 from cron.p_activity import p_activity
 from cron.p_advertiser import p_advertiser
 from cron.p_segment import p_segment
+from cron.p_agence import p_agence
 from reporting.reporting_final import reporting as final
 import requests
 import pandas as pd
@@ -43,3 +44,9 @@ class Cron():
             cron.report()
         except Exception as e:
             print(e)
+    def start_agence(self):
+        try:
+            cron=p_agence()
+            cron.run()
+        except Exception as e:
+            print(f"[Erreur] cron agence: {e}")

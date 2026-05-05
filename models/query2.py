@@ -104,10 +104,14 @@ class Query2:
         t.database_id,
         groupUniqArray(t.id_routers) AS id_routers,
         t.tag_id,
+        max(t.clicks_val) AS clicks_val,
+        max(t.leads_val) AS leads_val,
+        max(t.cpm_val) AS volume_val,
         t.brand,
+        groupUniqArray(tuple(t.model, t.payvalue, t.comment)) AS models,
+        t.client_id,
         t.optimized,
         t.subject,
-        t.comment,
         t.date_schedule,
         t.gender,
         t.age_range,
@@ -129,12 +133,11 @@ class Query2:
     WHERE t.adv_id = %(adv_id)s 
     GROUP BY
         t.adv_id, t.database_id, t.tag_id,t.date_schedule,
-        t.brand, t.optimized, t.subject, t.comment,
+        t.brand,t.client_id, t.optimized, t.subject,
         t.gender, t.age_range, t.main_isp, t.id_focus, t.dep
     HAVING sends>0
 """
         rows = self._execute_query(query, {"adv_id": adv_id})
-
         if not rows:
             return {"advertiser_id": str(adv_id), "globales": {}, "bases": []}
 
@@ -171,7 +174,7 @@ class Query2:
             push_dim(base, "age_range", r["age_range"], sends, clicks, clickers, opens, openers, unsubs)
             push_dim(base, "gender", r["gender"], sends, clicks, clickers, opens, openers, unsubs)
             push_dim(base, "isp", r["main_isp"], sends, clicks, clickers, opens, openers, unsubs)
-            brand_key = (r["brand"],r["tag_id"])
+            brand_key = (r["brand"],r["tag_id"],r["client_id"])
             brands_map = base["brands"]
 
             if brand_key not in brands_map:
@@ -179,9 +182,10 @@ class Query2:
                     "name": r["brand"],
                     "id_routers": set(),
                     "tag_id": r["tag_id"],
+                    "agence": r["client_id"],
                     "creativities": r.get("optimized") or "",
-                    "comment": (r.get("comment") or "").replace("None", ""),
                     "subject": r["subject"],
+                    "models":[],
                     "segment_id": set(),
                     "ListId": set(),
                     "ListName": set(),
@@ -192,12 +196,35 @@ class Query2:
                     "opens": 0,
                     "openers": 0,
                     "unsubs": 0,
+                    "clicks_val":0,
+                    "leads_val":0,
+                    "volume_val":0,
                     "ca": 0,
                     "_ca_focus": {},
                     "dimensions": {"age_range": {}, "gender": {}, "isp": {}}
                 }
 
             brand = brands_map[brand_key]
+            brand["clicks_val"] = r.get("clicks_val") or brand["clicks_val"] or 0
+            brand["leads_val"] = r.get("leads_val") or brand["leads_val"] or 0
+            brand["volume_val"] = r.get("volume_val") or brand["volume_val"] or 0
+            models = r.get("models") or []
+            seen_models = set()
+            clean_models = []
+            for m in models:
+                if not m:
+                    continue
+                key = (m[0], m[1], m[2])
+                if key in seen_models:
+                    continue
+                seen_models.add(key)
+                clean_models.append({
+                    "model": m[0],
+                    "payvalue": m[1],
+                    "comment": m[2] if m[2] not in (None, "None") else ""
+                })
+
+            brand["models"] = clean_models
             brand["id_routers"].update(r.get("id_routers") or [])
             brand["date_schedule"].update(r.get("date_schedule") or [])
             segmentids = r.get("segmentId") or []
@@ -373,11 +400,14 @@ class Query2:
             t.adv_id,
             t.database_id,
             groupUniqArray(t.id_routers) AS id_routers,
+            max(t.clicks_val) AS clicks_val,
+            max(t.leads_val) AS leads_val,
+            max(t.cpm_val) AS volume_val,
+            groupUniqArray(tuple(t.model, t.payvalue, t.comment)) AS models,
             t.tag_id,
             t.brand,
             t.optimized,
             t.subject,
-            t.comment,
             t.date_schedule,
             t.gender,
             t.age_range,
@@ -399,8 +429,7 @@ class Query2:
         WHERE t.database_id = %(db_id)s 
         GROUP BY
             t.adv_id, t.database_id, t.tag_id, t.date_schedule,
-            t.brand, t.optimized, t.subject, t.comment,
-            t.gender, t.age_range, t.main_isp, t.id_focus, t.dep
+            t.brand, t.optimized, t.subject, t.gender, t.age_range, t.main_isp, t.id_focus, t.dep
         HAVING sends > 0
         """
 
@@ -460,27 +489,46 @@ class Query2:
                 "name": r["brand"],
                 "tag_id": r["tag_id"],
                 "creativities": r.get("optimized") or "",
-                "comment": (r.get("comment") or "").replace("None", ""),
                 "subject": r["subject"],
                 "id_routers": set(),
+                "models":[],
                 "segment_id": set(),
                 "ListId": set(),
                 "ListName": set(),
                 "date_schedule": set(),
                 "sends": 0, "clicks": 0, "clickers": 0,
                 "opens": 0, "openers": 0, "unsubs": 0,
+                "clicks_val":0,
+                "leads_val":0,
+                "volume_val":0,
                 "ca": 0,
                 "dimensions": {"age_range": {}, "gender": {}, "isp": {}},
                 "_seen_focus": set()
             })
-
+            brand["clicks_val"] = r.get("clicks_val") or brand["clicks_val"] or 0
+            brand["leads_val"] = r.get("leads_val") or brand["leads_val"] or 0
+            brand["volume_val"] = r.get("volume_val") or brand["volume_val"] or 0
+            models = r.get("models") or []
+            seen_models = set()
+            clean_models = []
+            for m in models:
+                if not m:
+                    continue
+                key = (m[0], m[1], m[2])
+                if key in seen_models:
+                    continue
+                seen_models.add(key)
+                clean_models.append({
+                    "model": m[0],
+                    "payvalue": m[1],
+                    "comment": m[2] if m[2] not in (None, "None") else ""
+                })
+            brand["models"] = clean_models
             brand["id_routers"].update(r.get("id_routers") or [])
             brand["date_schedule"].update(r.get("date_schedule") or [])
-
             brand["segment_id"].update(r.get("segmentId") or [])
             brand["ListId"].update(r.get("ListId") or [])
             brand["ListName"].update(r.get("ListName") or [])
-
             brand["sends"] += sends
             brand["clicks"] += clicks
             brand["clickers"] += clickers
@@ -942,3 +990,32 @@ class Query2:
         return df_filtered[
             ["id_segment","segment_name","database_id"]
         ].to_dict(orient='records')
+
+
+    def get_agences(self, agence_id=None):
+        query = "SELECT id, name FROM agences"
+        params = {}
+
+        if agence_id is not None:
+             query += f" WHERE id = {int(agence_id)}"
+
+        rows = self._execute_query(query, params)
+
+        return [
+            {"agence_id": r["id"], "agence_name": r["name"]}
+            for r in rows
+        ]
+
+    def get_tags(self, tags_id=None):
+        query = "SELECT id, tag FROM tags"
+        params = {}
+
+        if tags_id is not None:
+            query += f" WHERE id = {int(tags_id)}"
+
+        rows = self._execute_query(query, params)
+
+        return [
+            {"tag_id": r["id"], "tag_name": r["tag"]}
+            for r in rows
+        ]

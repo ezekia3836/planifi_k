@@ -1,13 +1,16 @@
 from .adaptiveChunck import AdaptiveChunkManager
+from threading import Lock
 from config.PgConfig import PgConfig
 from config.ClickHouseConfig import ClickHouseConfig
 from config.konticrea import connect_kit
 from datetime import datetime,date,timedelta
-import time, math, requests, psutil
+import time, math, requests
 from sqlalchemy import text
 import pandas as pd
 import numpy as np
 from dateutil.relativedelta import relativedelta
+from queue import Queue
+from contextlib import contextmanager
 import logging
 import os
 import gc
@@ -24,7 +27,7 @@ AGE_LABELS = ["0-18", "18-24", "25-34", "35-44", "45-54", "55-64", "65-74", "75+
 NEED_COLS = [
     "database_id","id_routers","id_focus","adv_id","dwh_id",
     "segmentId","subject","event_type","date_event","tag_id",
-    "brand","client_id","ListId","ListName","affiliate_id","ca","comment",
+    "brand","client_id","ListId","ListName","affiliate_id","client_id","ca","payvalue","clicks_val","leads_val","cpm_val","model","comment",
     "bounces","clickers","clicks","complaints","openers",
     "opens","sends","unsubs","date_schedule"
 ]
@@ -35,19 +38,19 @@ GROUP_COLS = [
 COLUMNS_FINAL = [
     "database_id", "dwh_id",
     "country", "segmentId", "subject", "brand", "tag_id",
-    "adv_id", "id_routers","id_focus", "affiliate_id", "ListId","ListName", "zipcode", "dep",
+    "adv_id", "id_routers","id_focus", "affiliate_id","client_id", "ListId","ListName", "zipcode", "dep",
     "sends", "opens", "openers", "clicks", "clickers", "unsubs","complaints",
-    "bounces","age_range", "gender", "main_isp", "age_gender_isp", "ca",
+    "bounces","age_range", "gender", "main_isp", "age_gender_isp", "ca","payvalue","clicks_val","leads_val","cpm_val","model",
     "date_schedule", "date_event", "optimized","comment","date_schedule_max", "updated_at",
 ]
 INT_COLS = [
     "database_id", "segmentId", "tag_id", "adv_id", "sends", "opens",
     "openers", "clicks", "clickers", "unsubs","complaints","bounces","ListId",
-    "affiliate_id", "country","id_focus"
+    "affiliate_id","client_id", "country","id_focus","clicks_val","leads_val","cpm_val"
 ]
 STR_COLS = [
     "id_routers", "age_range", "gender", "main_isp",
-    "optimized", "subject", "zipcode", "dep","comment"
+    "optimized", "subject", "zipcode", "dep","comment","model"
 ]
 logging.basicConfig(
     level=logging.INFO,
@@ -66,7 +69,20 @@ class reporting:
         self.cache_contacts = {}
         self.ktk_id_cache = {}
         self.optimize_cache = {}
-  
+        self.init_clk_pool()
+
+    def init_clk_pool(self, size=4):
+        self.clk_pool = Queue(maxsize=size)
+        for _ in range(size):
+            self.clk_pool.put(ClickHouseConfig().getClient_prod())
+
+    @contextmanager
+    def get_clk(self):
+        clk = self.clk_pool.get()
+        try:
+            yield clk
+        finally:
+            self.clk_pool.put(clk)
 
     def recupere_pg_optimized(self, date_start, date_end, batch=1000, max_workers=4):
         start = datetime.strptime(date_start, "%Y-%m-%d")
@@ -144,46 +160,56 @@ class reporting:
         query = text("""
             WITH base AS (
                 SELECT
-                    vd.id          AS id_focus,
-                    vd.advertiser,
+                    vd.id  AS id_focus,
+                    vd.base  AS database_id,
                     vd.date_shedule,
-                    pa.caeur       AS ca,
-                    vd.comment
+                    pa.caeur  AS ca,
+                    pa.clickval    AS clicks_val,
+                    pa.leadsval AS leads_val,
+                    pa.cpmval AS cpm_val,
+                    pa.p_comment AS comment,
+                    pa.leadsval    AS leadsval,
+                    pa.cpmval  AS cpmval,
+                    pa.payvalue AS payvalue,
+                    mo.name AS model
                 FROM visu.v2_data vd
                 JOIN visu.v2_status st ON st.id = vd.status
                 LEFT JOIN visu.v2_payoutinfo pa ON pa.id_data = vd.id
+                LEFT JOIN visu.model mo ON pa.model=mo.id
                 WHERE st.id = 5
                 AND vd.date_shedule BETWEEN :date_start AND :date_end
             ),
             routers AS (
-                -- ── directs : idsendout du focus lui-même
                 SELECT
                     vd.id     AS id_focus,
                     vd.idsendout,
                     TRUE      AS is_direct
                 FROM visu.v2_data vd
-                -- ── filtre sur les focus de la base seulement
                 WHERE vd.id IN (SELECT id_focus FROM base)
                 AND vd.idsendout IS NOT NULL
 
                 UNION ALL
 
-                -- ── reuses : idsendout des campagnes réutilisées
                 SELECT
                     vd.id     AS id_focus,
                     vd2.idsendout,
                     FALSE     AS is_direct
                 FROM visu.v2_data vd
-                JOIN visu.v2_data_reuse r  ON r.id_v2   = vd.id
-                JOIN visu.v2_data      vd2 ON vd2.id    = r.id_reuse
+                JOIN visu.v2_data_reuse r  ON r.id_v2  = vd.id
+                JOIN visu.v2_data      vd2 ON vd2.id   = r.id_reuse
                 WHERE vd.id IN (SELECT id_focus FROM base)
                 AND vd2.idsendout IS NOT NULL
             )
             SELECT
                 b.id_focus,
-                b.advertiser,
-                MAX(b.ca)       AS ca,
-                MAX(b.comment)  AS comment,
+                b.database_id,
+                MAX(b.ca)         AS ca,
+                MAX(b.payvalue)  AS payvalue,
+                MAX(b.clicks_val) AS clicks_val,
+                MAX(b.leads_val) AS leads_val,
+                MAX(b.cpm_val) AS cpm_val,
+                MAX(b.comment)    AS comment,
+                MAX(b.model) AS model,
                 json_agg(DISTINCT b.date_shedule ORDER BY b.date_shedule) AS date_schedule,
                 json_agg(DISTINCT jsonb_build_object(
                     'idsendout', r.idsendout,
@@ -191,90 +217,60 @@ class reporting:
                 )) FILTER (WHERE r.idsendout IS NOT NULL) AS id_routers
             FROM base b
             LEFT JOIN routers r ON r.id_focus = b.id_focus
-            GROUP BY b.id_focus, b.advertiser
+            GROUP BY b.id_focus, b.database_id
         """)
-
-        focus_cache = {}
-        pg_map = []
+        result: dict = {}
 
         try:
             with self.pg.connect() as conn:
-                result = conn.execution_options(
+                rows_result = conn.execution_options(
                     stream_results=True,
                     yield_per=batch,
-                ).execute(query,
-                {"date_start":date_start, "date_end":date_end}
-                )
+                ).execute(query, {"date_start": date_start, "date_end": date_end})
 
                 while True:
-                    rows = result.fetchmany(batch)
+                    rows = rows_result.fetchmany(batch)
                     if not rows:
                         break
 
                     for row in rows:
-                        id_focus, advertiser, ca, comment, date_schedule, id_routers_list = row
+                        (id_focus, database_id, ca,payvalue,clicks_val,leads_val,cpm_val,comment,model,date_schedule, id_routers_list) = row
 
-                        # =========================
-                        # focus cache (stable)
-                        # =========================
-                        if id_focus not in focus_cache:
-                            focus_cache[id_focus] = {
-                                "advertiser": advertiser,
-                                "ca": ca,
-                                "comment": comment,
-                                "date_schedule": date_schedule if isinstance(date_schedule, list) else [],
-                            }
-
-                        # =========================
-                        # 🔥 IMPORTANT : PAS DE GROUPING PAR id_router
-                        # =========================
                         if not id_routers_list:
                             continue
 
+                        focus_data = {
+                            "id_focus":      id_focus,
+                            "database_id":   database_id,
+                            "ca":            ca           or 0,
+                            "payvalue":      payvalue     or 0,
+                            "clicks_val":  clicks_val or 0,
+                            "leads_val":   leads_val or 0,
+                            "cpm_val": cpm_val or 0,
+                            "comment":       comment       or "",
+                            "model":        model or "",
+                            "date_schedule": date_schedule if isinstance(date_schedule, list) else [],
+                        }
+
                         for item in id_routers_list:
-                            id_r = item.get("idsendout")
-                            if id_r is None:
+                            id_router = item.get("idsendout")
+                            if id_router is None:
                                 continue
 
-                            pg_map.append({
-                                "id_router": id_r,
-                                "id_focus": id_focus,
-                                "is_direct": item.get("is_direct", False)
-                            })
+                            is_direct = item.get("is_direct", False)
+
+                            key = (int(id_router), int(database_id))
+                            existing = result.get(key)
+
+                            if existing is None or (is_direct and not existing["is_direct"]):
+                                result[key] = {**focus_data, "is_direct": is_direct}
 
         except Exception as e:
             self.notifier_erreur(f"Erreur Focus : {e}")
             return {}
 
-        # =========================
-        # 🔥 RESULT FINAL = LIGNES DISTINCTES
-        # =========================
-        result = {}
-
-        for row in pg_map:
-            id_r = row["id_router"]
-            id_focus = row["id_focus"]
-
-            focus = focus_cache.get(id_focus)
-            if not focus:
-                continue
-
-            # clé unique = combinaison
-            key = (id_r, id_focus)
-
-            result[key] = {
-                "id_router": id_r,
-                "id_focus": id_focus,
-                "advertiser": focus["advertiser"],
-                "ca": focus["ca"],
-                "comment": focus["comment"],
-                "date_schedule": focus["date_schedule"],
-                "is_direct": row["is_direct"],
-            }
-
-        logger.info(f"Focus : {len(result)} rows")
+        logger.info(f"Focus : {len(result)} entrées (id_router, database_id)")
         return result
-
     def recupere_events(self, id_routers_focus,date_start,date_end):
         if not id_routers_focus:
             return
@@ -283,32 +279,35 @@ class reporting:
         extended_end = (end_dt + timedelta(days=7)).strftime("%Y-%m-%d")
 
         query = f"""
-        SELECT
-            database_id,
-            MessageId AS id_routers,
-            adv_id,
-            dwh_id,
-            SegmentId AS segmentId,
-            MessageSubject AS subject,
-            event_type,
-            Date AS date_event,
-            tag AS tag_id,
-            brand,
-            client_id,
-            ListId,
-            ListName,
-            affiliate_id
-        FROM prod_events_2
-        WHERE
-            MessageId IN ({",".join(map(str, id_routers_focus))})
-            AND adv_id != 0 AND Date BETWEEN '{date_start}' AND '{extended_end}'
-        """
+            SELECT
+            p.database_id,
+            p.MessageId AS id_routers,
+            p.adv_id,
+            p.dwh_id,
+            p.SegmentId AS segmentId,
+            p.MessageSubject AS subject,
+            p.event_type,
+            p.Date AS date_event,
+            p.tag AS tag_id,
+            p.brand,
+            p.client_id,
+            p.ListId,
+            p.ListName,
+            p.affiliate_id,
+            d.stats_id
+        FROM prod_events_2 p
+        LEFT JOIN databases d ON d.id = p.database_id
+        PREWHERE p.MessageId IN ({",".join(map(str, id_routers_focus))})
+        WHERE p.Date BETWEEN '{date_start}' AND '{extended_end}'
+        AND p.adv_id != 0
+"""
 
         try:
-            r = self.resilient_call(self.clk.query, query)
+            with self.get_clk() as clk:
+                r = clk.query(query)
 
-            for row in r.result_rows:
-                yield dict(zip(r.column_names, row))
+                for row in r.result_rows:
+                    yield dict(zip(r.column_names, row))
 
         except Exception as e:
             self.notifier_erreur(f"Erreur events: {e}")
@@ -333,9 +332,10 @@ class reporting:
                 GROUP BY dwh_id
             """
             try:
-                r = self.resilient_call(self.clk.query, query)
-                for row in r.result_rows:
-                    contacts_map[str(row[0])] = dict(zip(r.column_names[1:], row[1:]))
+                with self.get_clk() as clk:
+                    r = clk.query(query)
+                    for row in r.result_rows:
+                        contacts_map[str(row[0])] = dict(zip(r.column_names[1:], row[1:]))
             except Exception as e:
                 self.notifier_erreur(f"Erreur contacts batch : {e}")
         return contacts_map
@@ -355,28 +355,33 @@ class reporting:
         }
    
     def recupere_ktk_id(self, database_ids):
+
         if not database_ids:
             return {}
+
+        ids = ",".join(str(x) for x in database_ids)
+
+        query = f"""
+        SELECT id, ktk_id, basename, country
+        FROM databases
+        WHERE id IN ({ids})
+        """
+
         try:
-            ids   = ",".join(str(x) for x in database_ids)
-            if not ids:
-                return {}
-            query = f"""
-                SELECT id AS database_id, ktk_id, basename, country
-                FROM databases
-                WHERE id IN ({ids})
-            """
-            r = self.clk.query(query)
-            return {
-                str(row[0]): {
-                    "ktk_id":   row[1] or "ktk_vide",
-                    "basename": row[2] or "base_vide",
-                    "country":  row[3] or 0,
+            with self.get_clk() as clk:
+                r = clk.query(query)
+
+                return {
+                    str(row[0]): {
+                        "ktk_id": row[1] or "ktk_vide",
+                        "basename": row[2] or "base_vide",
+                        "country": row[3] or 0,
+                    }
+                    for row in r.result_rows
                 }
-                for row in r.result_rows
-            }
+
         except Exception as e:
-            self.notifier_erreur(f"Erreur ktk_id : {e}")
+            self.notifier_erreur(f"Erreur ktk_id: {e}")
             return {}
 
     def get_ktk_id_cached(self, database_ids):
@@ -478,221 +483,280 @@ class reporting:
             self.optimize_cache.clear()
    
     def report(self):
-
         self.clean_cache()
+        seen_openers:  set = set()
+        seen_clickers: set = set()
+        seen_unsubs: set = set()
+        seen_lock = Lock()
 
-        def check_initialization():
+        def read_state():
             file = "etat.txt"
+            state = {"initialized": False, "processed": set()}
             if not os.path.exists(file):
-                return False
+                return state
             try:
                 with open(file, "r") as f:
-                    return "initialized=1" in f.read().strip()
+                    content = f.read().strip()
+                for line in content.splitlines():
+                    if line.startswith("initialized="):
+                        state["initialized"] = line.split("=")[1] == "1"
+                    elif line.startswith("processed="):
+                        months = line.split("=")[1]
+                        if months:
+                            state["processed"] = set(months.split(","))
             except Exception as e:
                 logger.error(f"Erreur lecture état : {e}")
-                return False
+            return state
+
+        def write_state(state):
+            try:
+                with open("etat.txt", "w") as f:
+                    f.write(f"initialized={'1' if state['initialized'] else '0'}\n")
+                    f.write(f"processed={','.join(sorted(state['processed']))}")
+            except Exception as e:
+                logger.error(f"Erreur écriture état : {e}")
 
         def chunk_list(lst, size):
             for i in range(0, len(lst), size):
                 yield lst[i:i + size]
 
-        initialized = check_initialization()
-        n_months = 2 if initialized else 3
+        # 🔹 lecture état
+        state = read_state()
+        initialized = state["initialized"]
+        processed_months = state["processed"]
 
+        n_months = 2 if initialized else 3
         logger.info(f"Lancement {'régulier' if initialized else 'initial'} — {n_months} mois")
 
         months = self.get_month_ranges(1, 1, 2026)
 
-        success = True
+        MAX_WORKERS_PROCESS = 4
 
         try:
             for date_start, date_end, partition in months:
 
+                seen_openers.clear()
+                seen_clickers.clear()
+                if partition in processed_months:
+                    logger.info(f"[SKIP] Déjà traité : {partition}")
+                    continue
+
+                logger.info(f"Traitement {date_start} à {date_end}")
                 if initialized:
                     try:
                         query = f"ALTER TABLE {self.table} DROP PARTITION {partition}"
-                        self.clk.command(query)
+                        self.clk.query(query)
                         logger.info(f"Partition supprimée : {partition}")
                     except Exception as e:
                         logger.warning(f"Erreur DROP partition {partition} : {e}")
-
-                logger.info(f"Traitement {date_start} à {date_end}")
-
-                # =========================
-                # 🔥 1. DATA FOCUS
-                # =========================
                 data = self.recupere_pg(date_start, date_end)
-
                 if not data:
                     logger.warning(f"Pas de données pour {partition}")
                     continue
 
-                focus_map = data  # id_router → focus
-                router_ids = list(focus_map.keys())
+                focus_map = data
+                router_ids = list({int(id_r) for (id_r, db_id) in data.keys()})
+                del data
 
                 rows = []
+                futures = []
 
-                for chunk in chunk_list(router_ids, 5):
+                from concurrent.futures import ThreadPoolExecutor, as_completed
 
-                    for row in self.recupere_events(chunk, date_start, date_end):
+                with ThreadPoolExecutor(max_workers=MAX_WORKERS_PROCESS) as executor:
 
-                        # ✔ clé correcte = id_router
-                        focus = focus_map.get(row["id_router"])
-                        if not focus:
-                            continue
+                    for id_routers in chunk_list(router_ids, 5):
 
-                        row["id_focus"] = focus["id_focus"]
-                        row["ca"] = focus["ca"]
-                        row["comment"] = focus["comment"]
-                        row["date_schedule"] = focus["date_schedule"]
-                        row["is_direct"] = focus["is_direct"]
+                        for row in self.recupere_events(id_routers, date_start, date_end):
 
-                        rows.append(row)
+                            try:
+                                id_r = int(row.get("id_routers", 0))
+                                db = int(row.get("stats_id", 0))
+                            except (ValueError, TypeError):
+                                continue
 
-                        if len(rows) >= 10_000:
-                            self._process_batch(rows)
-                            rows.clear()
-                            self.clean_cache(max_size=200_000)
-                            gc.collect()
+                            key = (id_r, db)
+                            focus = focus_map.get(key)
+                            if not focus:
+                                continue
+                            row.update({
+                                "id_focus": focus["id_focus"],
+                                "ca": focus["ca"],
+                                "payvalue": focus["payvalue"],
+                                "clicks_val": focus["clicks_val"],
+                                "leads_val": focus["leads_val"],
+                                "cpm_val": focus["cpm_val"],
+                                "comment": focus["comment"],
+                                "model": focus["model"],
+                                "date_schedule": focus["date_schedule"],
+                                "is_direct": focus["is_direct"],
+                            })
 
-                if rows:
-                    self._process_batch(rows)
-                    rows.clear()
-                    gc.collect()
+                            ev  = row.get("event_type")
+                            dedup_key = (
+                                row.get("adv_id"),
+                                row.get("id_routers"),
+                                row.get("dwh_id"),
+                            )
+                            with seen_lock:
+                                if ev == "Opens":
+                                    row["openers"] = int(dedup_key not in seen_openers)
+                                    if row["openers"]:
+                                        seen_openers.add(dedup_key)
+                                else:
+                                    row["openers"] = 0
 
-                logger.info(f"[SUCCESS] Traitement terminé pour: {date_start} - {date_end}")
+                                if ev == "Clicks":
+                                    row["clickers"] = int(dedup_key not in seen_clickers)
+                                    if row["clickers"]:
+                                        seen_clickers.add(dedup_key)
+                                else:
+                                    row["clickers"] = 0
+                                
+                                if ev == "Removals":
+                                    row["unsubs"] = int(dedup_key not in seen_unsubs)
+                                    if row["unsubs"]:
+                                        seen_unsubs.add(dedup_key)
+                                else:
+                                    row["unsubs"] = 0
 
-                del focus_map, router_ids, data
+                            rows.append(row)
+                            if len(rows) >= 8000:
+                                futures.append(
+                                    executor.submit(self._process_batch, rows.copy())
+                                )
+                                rows.clear()
+
+                            if len(futures) >= MAX_WORKERS_PROCESS * 2:
+                                for f in as_completed(futures[:2]):
+                                    f.result()
+                                futures = futures[2:]
+
+                    if rows:
+                        futures.append(executor.submit(self._process_batch, rows.copy()))
+                        rows.clear()
+
+                    for f in as_completed(futures):
+                        f.result()
+                del focus_map, router_ids
                 gc.collect()
 
-        except Exception as e:
-            success = False
-            logger.error(f"Erreur pipeline : {e}", exc_info=True)
+                state["processed"].add(partition)
+                write_state(state)
 
-        if success and not initialized:
-            try:
-                with open("etat.txt", "w") as f:
-                    f.write("initialized=1")
+                logger.info(f"[SUCCESS] {date_start} - {date_end}")
+            if not initialized:
+                state["initialized"] = True
+                write_state(state)
                 logger.info("État initialisé")
-            except Exception as e:
-                logger.error(f"Erreur écriture état : {e}")
+
+        except Exception as e:
+            logger.error(f"Erreur pipeline : {e}", exc_info=True)
     
     def _process_batch(self, rows_batch, database_id=None):
-        if len(rows_batch) > 70_000:
-            logger.warning(f"Batch trop gros: {len(rows_batch)}")
+        clk = ClickHouseConfig().getClient_prod()
+        if not rows_batch:
             return
+
         df = pd.DataFrame(rows_batch)
-        for col in NEED_COLS:
-            if col not in df.columns:
-                df[col] = None
+
         if df.empty:
             return
 
+        # 🔹 filtre optionnel
         if database_id is not None:
             df = df[df["database_id"] == database_id]
             if df.empty:
                 return
+
+        # 🔹 colonnes minimales (évite boucle NEED_COLS)
+        missing_cols = set(NEED_COLS) - set(df.columns)
+        for col in missing_cols:
+            df[col] = None
+
         df["database_id"] = df["database_id"].astype(str)
         df["dwh_id"] = df["dwh_id"].astype("string").fillna("")
         df["event_type"] = df["event_type"].astype("string")
 
-        event = df["event_type"]
+        event = df["event_type"].values
 
-        df["sends"] = event.eq("Sends").astype("int8")
-        df["opens"] = event.eq("Opens").astype("int8")
-        df["clicks"] = event.eq("Clicks").astype("int8")
-        df["unsubs"] = event.eq("Removals").astype("int8")
-        df["complaints"] = event.eq("Complaints").astype("int8")
-        df["bounces"] = event.eq("Bounces").astype("int8")
+        df["sends"] = (event == "Sends").astype(np.int8)
+        df["opens"] = (event == "Opens").astype(np.int8)
+        df["clicks"] = (event == "Clicks").astype(np.int8)
+        df["complaints"] = (event == "Complaints").astype(np.int8)
+        df["bounces"] = (event == "Bounces").astype(np.int8)
 
-        key_cols = ["adv_id", "id_routers", "dwh_id"]
-
-        click_mask = event.eq("Clicks")
-        open_mask = event.eq("Opens")
-
-        df["clickers"] = 0
-        df["openers"] = 0
-
-        if click_mask.any():
-            tmp = df.loc[click_mask, key_cols]
-            df.loc[click_mask, "clickers"] = (~tmp.duplicated()).astype("int8").to_numpy()
-
-        if open_mask.any():
-            tmp = df.loc[open_mask, key_cols]
-            df.loc[open_mask, "openers"] = (~tmp.duplicated()).astype("int8").to_numpy()
+        if "openers" not in df.columns:
+            df["openers"]  = 0
+        if "clickers" not in df.columns:
+            df["clickers"] = 0
+        if "unsubs" not in df.columns:
+            df["unsubs"] = 0
+        
+        df["openers"]  = pd.to_numeric(df["openers"],  errors="coerce").fillna(0).astype(np.int8)
+        df["clickers"] = pd.to_numeric(df["clickers"], errors="coerce").fillna(0).astype(np.int8)
+        df["unsubs"]   = pd.to_numeric(df["unsubs"],   errors="coerce").fillna(0).astype(np.int8)
 
         dwh_ids = df["dwh_id"].unique()
         contacts_map = self.get_contacts_cached(dwh_ids)
 
         if contacts_map:
-            contact_df = pd.DataFrame.from_dict(contacts_map, orient="index")
-            contact_df.index.name = "dwh_id"
-            contact_df = contact_df.reset_index()
-            df = df.merge(contact_df, on="dwh_id", how="left")
+            df["age"] = df["dwh_id"].map(lambda x: contacts_map.get(x, {}).get("age"))
+            df["gender"] = df["dwh_id"].map(lambda x: contacts_map.get(x, {}).get("gender", "O_gender"))
+            df["main_isp"] = df["dwh_id"].map(lambda x: contacts_map.get(x, {}).get("main_isp", "O_isp"))
+            df["zipcode"] = df["dwh_id"].map(lambda x: contacts_map.get(x, {}).get("zipcode", "zipcode_vide"))
+            df["dep"] = df["dwh_id"].map(lambda x: contacts_map.get(x, {}).get("dep", "dep_vide"))
 
-
-        for col, default in [("age", None), ("gender", "O_gender"),
-                            ("main_isp", "O_isp"), ("zipcode", "zipcode_vide"), ("dep", "dep_vide")]:
-            if col not in df.columns:
-                df[col] = default
-
-        df["gender"]   = df["gender"].fillna("O_gender").replace({"O": "O_gender"})
+        df["gender"] = df["gender"].fillna("O_gender").replace({"O": "O_gender"})
         df["main_isp"] = df["main_isp"].fillna("O_isp").replace({"Other": "O_isp"})
-        df["zipcode"]  = df["zipcode"].fillna("zipcode_vide")
-        df["dep"]      = df["dep"].fillna("dep_vide")
-        df["age_range"] = (
-            pd.cut(pd.to_numeric(df["age"], errors="coerce"),
-                bins=AGE_BINS,
-                labels=AGE_LABELS,
-                right=False)
-            .astype("string")
-            .fillna("O_age")
+        df["zipcode"] = df["zipcode"].fillna("zipcode_vide")
+        df["dep"] = df["dep"].fillna("dep_vide")
+
+        age = pd.to_numeric(df["age"], errors="coerce").values
+
+        df["age_range"] = np.select(
+            [
+                age < 18,
+                age < 25,
+                age < 35,
+                age < 45,
+                age < 55,
+                age < 65,
+                age < 75,
+            ],
+            AGE_LABELS[:-1],
+            default="75+"
         )
+
         df["age_gender_isp"] = (
-            df["age_range"].astype(str)
-            + "_"
-            + df["gender"].astype(str)
-            + "_"
-            + df["main_isp"].astype(str)
+            df["age_range"].astype(str) + "_" +
+            df["gender"].astype(str) + "_" +
+            df["main_isp"].astype(str)
         )
+
         database_ids = df["database_id"].unique()
         db_map = self.get_ktk_id_cached(database_ids)
 
         if db_map:
-            db_df = pd.DataFrame.from_dict(db_map, orient="index").reset_index()
-            db_df.rename(columns={"index": "database_id"}, inplace=True)
-            df = df.merge(db_df, on="database_id", how="left")
-
-        for col, default in [("ktk_id", "ktk_vide"), ("basename", "base_vide"), ("country", 0)]:
-            if col not in df.columns:
-                df[col] = default
-
-        df["ktk_id"]  = df["ktk_id"].fillna("ktk_vide")
-        df["basename"]= df["basename"].fillna("base_vide")
-        df["country"] = df["country"].fillna(0)
-
+            df["ktk_id"] = df["database_id"].map(lambda x: db_map.get(x, {}).get("ktk_id", "ktk_vide"))
+            df["basename"] = df["database_id"].map(lambda x: db_map.get(x, {}).get("basename", "base_vide"))
+            df["country"] = df["database_id"].map(lambda x: db_map.get(x, {}).get("country", 0))
         try:
-            optimize_params = df[["id_focus", "ktk_id"]].drop_duplicates()
-
+            keys = list(zip(df["id_focus"].astype(str), df["ktk_id"].astype(str)))
             optimized_map = self.get_optimize_cached(
-                optimize_params.to_dict("records")
+                [{"id_focus": k[0], "ktk_id": k[1]} for k in set(keys)]
             ) or {}
 
-            keys = list(zip(df["id_focus"].astype(str), df["ktk_id"].astype(str)))
-
-            df["optimized"] = [
-                optimized_map.get(k, "optimized_vide")
-                for k in keys
-            ]
+            df["optimized"] = pd.Series(keys).map(optimized_map).fillna("optimized_vide")
 
         except Exception as e:
             logger.warning(f"Optimize indisponible: {e}")
             df["optimized"] = "optimized_vide"
 
-        if "date_schedule" not in df.columns:
-            df["date_schedule"] = [[] for _ in range(len(df))]
-
         df["date_event"] = pd.to_datetime(df["date_event"], errors="coerce")
+
+        if "date_schedule" not in df:
+            df["date_schedule"] = [[] for _ in range(len(df))]
 
         df["date_schedule_max"] = df["date_schedule"].map(
             lambda x: max(x) if isinstance(x, list) and x else None
@@ -700,39 +764,25 @@ class reporting:
 
         df["date_schedule_max"] = pd.to_datetime(df["date_schedule_max"], errors="coerce")
         df["updated_at"] = datetime.now()
-
-        for col in COLUMNS_FINAL:
-            if col not in df.columns:
-                df[col] = None
-
         df = df.reindex(columns=COLUMNS_FINAL, fill_value=None)
 
-        for col in INT_COLS:
-            if col in df:
-                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(np.int32)
-
-        for col in STR_COLS:
-            if col in df:
-                df[col] = df[col].astype("string").fillna("")
+        df[INT_COLS] = df[INT_COLS].apply(pd.to_numeric, errors="coerce").fillna(0).astype(np.int32)
+        df[STR_COLS] = df[STR_COLS].astype("string").fillna("")
 
         df["ca"] = df["ca"].fillna(0.0).astype(float)
+        df["payvalue"] = df["payvalue"].fillna(0.0).astype(float)
 
-        df["date_event"] = pd.to_datetime(df["date_event"], errors="coerce").fillna(datetime.now())
+        df["date_event"] = df["date_event"].fillna(datetime.now())
+        with self.get_clk() as clk:
 
+            for i in range(0, len(df), 20000):
+                chunk = df.iloc[i:i + 20000]
 
-        batch_size = 5000
-        n = len(df)
-
-        for start in range(0, n, batch_size):
-            end = start + batch_size
-            chunk = df[start:end]
-            try:
-                self.clk.insert_df(self.table, chunk)
-                # file_path = "temps.csv" 
-                # chunk.to_csv( file_path, mode='a', index=False, sep=';', header=not os.path.exists(file_path))
-                logger.info(f"[SUCCESS]")
-            except Exception as e:
-                logger.error(f"[ERROR] Insert {start}-{end}: {e}")
+                try:
+                    clk.insert_df(self.table, chunk)
+                    logger.info('[SUCCESS]')
+                except Exception as e:
+                    logger.error(f"Insert error: {e}")
 
         del df
         gc.collect()
