@@ -47,7 +47,6 @@ class p_tags:
 
             with open(self.path_tags, 'w') as fic:
                 json.dump(newlist, fic)
-
             return newlist
 
         except Exception as e:

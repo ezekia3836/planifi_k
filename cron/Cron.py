@@ -3,7 +3,9 @@ from cron.p_activity import p_activity
 from cron.p_advertiser import p_advertiser
 from cron.p_segment import p_segment
 from cron.p_agence import p_agence
+from cron.p_tags import p_tags
 from reporting.reporting_final import reporting as final
+from service.cache_batch import CacheBatchService
 import requests
 import pandas as pd
 
@@ -18,6 +20,13 @@ class Cron():
             cron.start_contact()
         except Exception as e:
             print('error at cron contacts ', e)
+            pass
+    def start_tags(self):
+        try:
+            cron = p_tags()
+            cron.startGetTags()
+        except Exception as e:
+            print('error at cron tags ', e)
             pass
     def start_act(self):
         try:
@@ -50,3 +59,9 @@ class Cron():
             cron.run()
         except Exception as e:
             print(f"[Erreur] cron agence: {e}")
+    def start_cache_batch(self):
+        try:
+            cache_batch_service = CacheBatchService()
+            cache_batch_service.run_full_batch()
+        except Exception as e:
+            print(f"[Erreur] cron cache batch: {e}")

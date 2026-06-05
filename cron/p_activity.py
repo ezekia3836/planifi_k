@@ -14,9 +14,9 @@ import numpy as np
 import os 
 from dateutil.relativedelta import relativedelta
 from google.cloud import storage
-from gcs.gcs import gcs
+#from gcs.gcs import gcs
 from models.Events import Events as events
-gcs = gcs('plannifik')
+#gcs = gcs('plannifik')
 
 class p_activity():
 

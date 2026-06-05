@@ -1,4 +1,4 @@
-from config.config_gcs import gcs_client,bucket
+"""from config.config_gcs import gcs_client,bucket
 from datetime import datetime
 from config.ClickHouseConfig import ClickHouseConfig
 from config.config import Config as config
@@ -38,7 +38,7 @@ class gcs:
          print("Insert en cours.......")
          for file_name in csv_files:
             gcs_url = f"https://storage.googleapis.com/{bucket_name}/{file_name}"
-            query = f"""
+            query = f
             INSERT INTO {table}
             SELECT * FROM s3(
                 '{gcs_url}',
@@ -47,7 +47,7 @@ class gcs:
                 'CSVWithNames'
             ) SETTINGS
         format_csv_delimiter = '|'
-            """
+            
             self.clk.command(query)
          print("Insert terminée!!!")
          
@@ -60,4 +60,4 @@ class gcs:
             return 0
         print("Suppr en cours.........")
         bucket.delete_blobs(blobs)
-        print("Suppr términée!!!")
+        print("Suppr términée!!!")"""

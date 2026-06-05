@@ -8,8 +8,8 @@ from datetime import datetime
 import hashlib
 from models.Contacts import Contacts
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from gcs.gcs import gcs
-gcs = gcs('plannifik')
+#from gcs.gcs import gcs
+#gcs = gcs('plannifik')
 contact = Contacts()
 class p_contact():
 
@@ -167,10 +167,10 @@ class p_contact():
                 #df.to_csv(f'erreur.csv', index=False, sep='|')
                 #pass"""
             df_clean=contact.clean_contacts_df(df)
-            gcs.upload_to_gcs(chunk_size=self.chuncksize,prefix=self.prefix,df=df_clean,path_gcs=self.path)
-                #self.contact_model.insert_dataframe(df)"""
+            """gcs.upload_to_gcs(chunk_size=self.chuncksize,prefix=self.prefix,df=df_clean,path_gcs=self.path)
+                #self.contact_model.insert_dataframe(df)
             gcs.insert_into_clickhouse(prefix=self.path,bucket_name='plannifik',table=self.prefix)
-            gcs.delete_data_bucket(prefix=self.path)
+            gcs.delete_data_bucket(prefix=self.path)"""
         except Exception as e:
             print('error processing chunk ',e)
             pass
