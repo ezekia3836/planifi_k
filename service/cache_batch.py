@@ -9,7 +9,7 @@ class CacheBatchService:
     MAX_WORKERS = 2
     CHUNK_SIZE  = 10
     SQL_BATCH   = 500
-    TABLE       = "clean_reporting"
+    TABLE   = "clean_reporting"
 
     @staticmethod
     def get_or_compute_advertiser(

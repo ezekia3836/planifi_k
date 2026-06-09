@@ -4,6 +4,7 @@ from cron.p_advertiser import p_advertiser
 from cron.p_segment import p_segment
 from cron.p_agence import p_agence
 from cron.p_tags import p_tags
+from cron.p_cold import p_cold
 from reporting.reporting_final import reporting as final
 from service.cache_batch import CacheBatchService
 import requests
@@ -13,7 +14,14 @@ class Cron():
 
     def __init__(self):
         pass
-
+    def start_cold(self):
+        try:
+            cron = p_cold()
+            cold_count = cron.get_cold()
+            print(f"Nombre de lignes mises à jour aujourd'hui: {cold_count}")
+        except Exception as e:
+            print('error at cron cold ', e)
+            pass
     def start_cont(self):
         try:
             cron = p_contact()

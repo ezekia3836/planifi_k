@@ -1,10 +1,11 @@
 from models.query2 import Query2
 from service.cache import CacheManager
 from reporting.auto.data import data_auto
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends
+import os
 from typing import Optional
 from dotenv import load_dotenv
-
+from user.dependencies import make_auth_dependency as curent_user
 from reporting.schema2 import (
     GlobalAdvertiserResponse,
     GlobalBaseResponse,
@@ -17,7 +18,8 @@ test = data_auto()
 
 router = APIRouter(
     prefix="/reporting",
-    tags=["Reporting"]
+    tags=["Reporting"],
+    dependencies=[Depends(curent_user(os.getenv("SECRET_KEY")))]
 )
 def cached_or_compute(key: str, compute_func):
     cached = CacheManager.get(key)
@@ -148,7 +150,6 @@ def get_agences(agence_id: Optional[int] = None):
         lambda: Query2().get_agences(agence_id=agence_id)
     )
 
-
 @router.get("/tags", summary="Liste de tout les tags")
 def get_tags(tags_id: Optional[int] = None):
     key = CacheManager.key("tags", tags_id or "all")
@@ -167,3 +168,10 @@ def get_databases(database_id: Optional[int] = None):
         key,
         lambda: Query2().get_databases(database_id=database_id)
     )
+@router.get("/filter_by_tags", summary="Filtrer les departements par tag et base")
+def filter_by_tags(
+    tag_id: int = Query(..., description="ID du tag à filtrer"),
+    database_id: int = Query(..., description="ID de la base à filtrer"),
+):
+    dep = Query2().filter_by_tags(tag_id=tag_id, database_id=database_id)
+    return dep

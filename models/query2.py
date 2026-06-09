@@ -1,4 +1,6 @@
 
+from unittest import result
+
 from config.ClickHouseConfig import ClickHouseConfig
 from reporting.analyze import analyse
 import math
@@ -36,6 +38,34 @@ class Query2:
             for block in stream:
                 for row in block:
                     yield dict(zip(columns, row))
+    def _get_analyse_dep(self, params: dict, id_col: str, date_filter: str) -> dict:
+
+        param = "%(adv_id)s" if id_col == "adv_id" else "%(db_id)s"
+        query = f"""
+            SELECT dep,
+                sum(clickers)  AS clickers,
+                sum(openers)   AS openers,
+                sum(unsubs)    AS unsubs,
+                sum(sends)     AS sends
+            FROM {self.table}
+            WHERE {id_col} = {param} {date_filter}
+            GROUP BY dep HAVING sends > 0
+        """
+        result = {}
+        for r in self._stream_query(query, params):
+            dep   = (r.get("dep") or "").strip()
+            dep   = dep if (len(dep) == 2 and dep.isdigit()) else "others"
+            sends = r["sends"] or 0
+            stats = {
+                "sends":         sends,
+                "clickers":      r["clickers"],
+                "taux_clickers": round(r["clickers"] / sends * 100, 4) if sends else 0.0,
+                "taux_openers":  round(r["openers"]  / sends * 100, 4) if sends else 0.0,
+                "taux_unsubs":   round(r["unsubs"]    / sends * 100, 3) if sends else 0.0,
+            }
+            if stats["clickers"] or stats["taux_openers"] or stats["taux_unsubs"]:
+                result[dep] = stats
+        return result
     def build_dimension_analysis(self, dim_data: dict) -> dict:
         empty = {"privilégier": None, "éviter": None}
         if not dim_data:
@@ -234,9 +264,9 @@ class Query2:
                     finalize_dim(seg)
 
         groups  = {} 
-        analyse_dep = {}
         total  = dict(sends=0, clicks=0, clickers=0,opens=0, openers=0, unsubs=0, ca=0)
         seen_focus_global = set()
+        seen_dwh_global   = set()
         found_any   = False
         meta  = {} 
         for r in self._stream_query(query, params):
@@ -272,8 +302,11 @@ class Query2:
                 "openers": openers,
                 "unsubs": unsubs,
             }
-            for k, v in metrics.items():
-                group[k] += v
+            dwh_id = r.get("dwh_id")
+            if dwh_id and dwh_id not in seen_dwh_global:
+                seen_dwh_global.add(dwh_id)
+                for k, v in metrics.items():
+                    total[k] += v
             acc_all_dimensions(group, r, metrics)
             brand_key = (r["brand"], r["tag_id"], r["client_id"], r["id_focus"])
             brand = group["brands"].setdefault(brand_key, {
@@ -328,13 +361,6 @@ class Query2:
                 if id_focus not in seen_focus_global:
                     seen_focus_global.add(id_focus)
                     total["ca"] += ca
-            raw_dep = str(r.get("departement") or "").strip()
-            dep = raw_dep if (len(raw_dep) == 2 and raw_dep.isdigit()) else "others"
-            d = analyse_dep.setdefault(dep, {"sends": 0, "clickers": 0, "openers": 0, "unsubs": 0})
-            d["sends"]    += sends
-            d["clickers"] += metrics["clickers"]
-            d["openers"]  += metrics["openers"]
-            d["unsubs"]   += metrics["unsubs"]
             for k, v in metrics.items():
                 total[k] += v
         if not found_any:
@@ -390,17 +416,6 @@ class Query2:
 
             group.pop("_seen_focus", None)
             result.append(entry)
-
-        total_sends = total["sends"]
-        for stats in analyse_dep.values():
-            stats["taux_clickers"] = round(stats["clickers"] / total_sends * 100, 4) if total_sends else 0
-            stats["taux_openers"]  = round(stats["openers"]  / total_sends * 100, 4) if total_sends else 0
-            stats["taux_unsubs"]   = round(stats["unsubs"]   / total_sends * 100, 3) if total_sends else 0
-        analyse_dep = {
-            dep: s for dep, s in analyse_dep.items()
-            if s["taux_clickers"] or s["taux_openers"] or s["taux_unsubs"]
-        }
-
         tc_g, to_g, tu_g, cto_g = compute_rates(
             total["sends"], total["openers"], total["clickers"], total["unsubs"])
         ecpm_g = round(total["ca"] / total["sends"] * 1000, 3) if total["sends"] else 0
@@ -423,7 +438,7 @@ class Query2:
                     "taux_cto":      self.analyze.analyze_cto_rate(cto_g, total["openers"]),
                     "taux_unsubs":   self.analyze.analyze_unsub_rate(tu_g),
                 },
-                "analyse_dep": analyse_dep,
+                "analyse_dep": {},
             },
             group_label: sorted(result, key=lambda x: (x["clickers"], x["ecpm"]), reverse=True),
         }
@@ -434,7 +449,7 @@ class Query2:
             date_filter = f"AND arrayExists(x -> x BETWEEN '{date_start}' AND '{date_end}', t.date_schedule)"
         else:
             date_filter = f"""
-                AND toStartOfMonth(t.date_schedule_max) >= toStartOfMonth(
+                AND toStartOfMonth(date_schedule_max) >= toStartOfMonth(
                     subtractMonths(
                         (SELECT max(date_schedule_max) FROM {self.table} WHERE adv_id = %(adv_id)s),
                         2
@@ -476,8 +491,9 @@ class Query2:
                     t.gender, t.age_range, t.main_isp, t.id_focus, t.dep
             HAVING sends > 0
         """
-        return self._run_global(query, {"adv_id": adv_id},
-                                pivot_key="database_id", group_label="bases")
+        result = self._run_global(query, {"adv_id": adv_id}, pivot_key="database_id", group_label="bases")
+        result["globales"]["analyse_dep"] = self._get_analyse_dep({"adv_id": adv_id}, "adv_id", date_filter)
+        return result
 
 
     def global_base(self, db_id, date_schedule=None, date_start=None, date_end=None):
@@ -487,11 +503,11 @@ class Query2:
             date_filter = f"AND arrayExists(x -> x BETWEEN '{date_start}' AND '{date_end}', t.date_schedule)"
         else:
             date_filter = f"""
-                AND toStartOfMonth(t.date_schedule_max) >= toStartOfMonth(
-                    subtractMonths(
-                        (SELECT max(date_schedule_max) FROM {self.table} WHERE database_id = %(db_id)s),
-                        2
+                AND date_schedule_max >= (
+                    SELECT toStartOfMonth(
+                        subtractMonths(max(date_schedule_max), 2)
                     )
+                    FROM {self.table}
                 )
             """
 
@@ -506,8 +522,7 @@ class Query2:
                 FROM {self.table} t
                 LEFT JOIN advertiser a ON a.id = t.adv_id
                 WHERE t.database_id = %(db_id)s
-                AND t.adv_id IS NOT NULL AND t.adv_id != 0
-                AND t.brand  IS NOT NULL AND t.brand  != ''
+                AND t.adv_id != 0
                 {date_filter}
             )
             SELECT t.adv_id, t.database_id,
@@ -517,10 +532,10 @@ class Query2:
                 t.age_range, t.main_isp, t.id_focus, t.dep AS departement,
                 sum(t.sends) AS sends, 
                 sum(t.clicks) AS clicks,
-                countIf(t.clicks > 0) AS clickers,
+                sum(t.clickers)  AS clickers,
+                sum(t.openers)  AS openers,
+                countIf(t.unsubs > 0)  AS unsubs,
                 sum(t.opens) AS opens,
-                countIf(t.opens > 0)  AS openers,
-                countIf(t.unsubs > 0) AS unsubs,
                 any(f.ca) AS ca,
                 MAX(t.clicks_val) AS clicks_val, MAX(t.leads_val) AS leads_val,
                 MAX(t.cpm_val) AS volume_val,
@@ -535,13 +550,11 @@ class Query2:
                     t.gender, t.age_range, t.main_isp, t.id_focus, t.dep
             HAVING sends > 0
         """
-        return self._run_global(query, {"db_id": db_id},
-                                pivot_key="adv_id", group_label="advertisers")
+        result = self._run_global(query, {"db_id": db_id}, pivot_key="adv_id", group_label="advertisers")
+        result["globales"]["analyse_dep"] = self._get_analyse_dep({"db_id": db_id}, "database_id", date_filter)
+        return result
     
     def all_advertisers(self, date_schedule=None, date_start=None, date_end=None):
-    
-        has_filter = date_schedule or (date_start and date_end)
-
         conditions = []
 
         if date_schedule:
@@ -556,11 +569,13 @@ class Query2:
             where_clause = "WHERE " + " AND ".join(conditions)
         else:
             where_clause = f"""
-                WHERE date_schedule_max >= (
-                    SELECT max(date_schedule_max) - INTERVAL 3 MONTH
+                WHERE adv_id IS NOT NULL AND adv_id != 0
+                AND date_schedule_max >= (
+                    SELECT toStartOfMonth(
+                        subtractMonths(max(date_schedule_max), 2)
+                    )
                     FROM {self.table}
-                )
-            """
+                )"""
         query = f"""
             WITH base AS (
                 SELECT
@@ -689,13 +704,7 @@ class Query2:
             conditions.append(
                 f"arrayExists(x -> x BETWEEN '{date_start}' AND '{date_end}', r.date_schedule)"
             )
-
         join_clause = " ".join(joins)
-
-        has_filter = date_schedule or (date_start and date_end)
-
-        conditions = []
-
         if date_schedule:
             conditions.append(f"has(date_schedule, '{date_schedule}')")
 
@@ -707,11 +716,14 @@ class Query2:
             where_clause = "WHERE " + " AND ".join(conditions)
         else:
              where_clause = f"""
-                WHERE date_schedule_max >= (
-                    SELECT max(date_schedule_max) - INTERVAL 3 MONTH
+                WHERE r.adv_id IS NOT NULL AND r.adv_id != 0
+                AND date_schedule_max >= (
+                    SELECT toStartOfMonth(
+                        subtractMonths(max(date_schedule_max), 2)
+                    )
                     FROM {self.table}
-                )
-            """
+                )"""
+             
         query = f"""
             WITH filtered AS (
                 SELECT
@@ -720,23 +732,25 @@ class Query2:
                     r.dwh_id,
                     r.sends,
                     r.clicks,
+                    r.clickers,
+                    r.openers,
                     r.opens,
                     r.unsubs
                 FROM {self.table} r
                 {join_clause}
                 {where_clause}
+                AND r.sends > 0
             ),
             stats AS (
                 SELECT
                     f.database_id,
                     sum(f.sends)         AS sends,
-                    sum(f.clicks)        AS clicks,
-                     countIf(f.opens > 0)  AS openers,
-                    countIf(f.clicks > 0) AS clickers,
-                    countIf(f.unsubs > 0) AS unsubs
+                    sum(f.clickers)      AS clickers,
+                    sum(f.openers)       AS openers,
+                    countIf(f.unsubs > 0)  AS unsubs
                 FROM filtered f
                 GROUP BY database_id
-                HAVING sum(f.sends) > 0
+                HAVING sends > 0
             ),
             ca_by_focus AS (
                 SELECT
@@ -758,7 +772,6 @@ class Query2:
                 s.database_id                                                        AS database_id,
                 d.basename                                                           AS basename,
                 s.sends                                                              AS sends,
-                s.clicks                                                             AS clicks,
                 s.clickers                                                           AS clickers,
                 s.openers                                                            AS openers,
                 s.unsubs                                                             AS unsubs,
@@ -770,7 +783,7 @@ class Query2:
                 round(coalesce(cu.ca_global, 0) / nullIf(s.sends, 0) * 1000, 3)     AS ecpm
             FROM stats s
             LEFT JOIN ca_unique cu ON cu.database_id = s.database_id
-            JOIN databases d       ON d.id = s.database_id
+            JOIN databases d   ON d.id = s.database_id
             ORDER BY s.sends DESC
         """
 
@@ -906,4 +919,43 @@ class Query2:
             {"database_id": r["id"], "database_name": r["basename"]}
             for r in rows
         ]
-
+    def filter_by_tags(self, tag_id, database_id):
+        date_filter = f"""
+            AND toStartOfMonth(date_schedule_max) >= toStartOfMonth(
+                subtractMonths(
+                    (SELECT max(date_schedule_max) FROM {self.table}
+                    WHERE tag_id = %(tag_id)s AND database_id = %(database_id)s),
+                    2
+                )
+            )"""
+        query = f"""
+            SELECT
+                dep,
+                sum(t.clickers) AS clickers,
+                sum(t.openers)  AS openers,
+                sum(t.unsubs)   AS unsubs,
+                sum(t.sends)    AS sends
+            FROM {self.table} t
+            WHERE tag_id      = %(tag_id)s
+            AND database_id = %(database_id)s
+            {date_filter}
+            GROUP BY dep
+            HAVING sends > 0
+        """
+        params = {"tag_id": int(tag_id), "database_id": int(database_id)}
+        result = {}
+        for r in self._stream_query(query, params):
+            dep = (r.get("dep") or "").strip()
+            if len(dep) != 2 or not dep.isdigit(): 
+                dep="Others"
+            sends = r["sends"] or 0
+            entry = {
+                "sends": r["sends"] if r["sends"] is not None else 0,
+                "clickers": r["clickers"] if r["clickers"] is not None else 0,
+                "taux_clickers": round(r["clickers"] / sends * 100, 4) if sends else 0.0,
+                "taux_openers":  round(r["openers"]  / sends * 100, 4) if sends else 0.0,
+                "taux_unsubs":   round(r["unsubs"]    / sends * 100, 3) if sends else 0.0,
+            }
+            if r["clickers"] or r["openers"] or r["unsubs"]:
+                result[dep] = entry
+        return result

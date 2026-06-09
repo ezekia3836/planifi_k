@@ -6,7 +6,14 @@ import requests
 import os
 import json
 import pandas as pd
+import logging
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("tags")
 class p_tags:
     def __init__(self, config=None, path_file=None):
         self.config = config
@@ -36,10 +43,14 @@ class p_tags:
                 except Exception:
                     os.remove(self.path_tags)
             r = requests.post(self.url + "/gettags", data={"userapikey": apikey}, timeout=self.timeout)
-            try:
-                result = r.json()
-            except Exception:
-                self.logger.error(f"API returned non-JSON data: {r.text}")
+            result = r.json()
+            if isinstance(result,dict):
+                if 'auth' in result:
+                    logger.error(result['auth'])
+                else:
+                    logger.error(f"API returned an unexpected dictionary: {result}")
+                    return []
+            if isinstance(result, list) and result and 'auth' in result[0]:
                 return []
             if isinstance(result, list) and result and 'auth' in result[0]:
                 return []
@@ -59,5 +70,8 @@ class p_tags:
         apikey=Config.TAGS_CONF["apikey"]
         tags = self.getListTags(apikey)
         df = pd.DataFrame(tags)
-        self.tags_model.insert_dataframe(self.table_name,df)
-        print("Insertion tags terminée!!")
+        try:
+            self.tags_model.insert_dataframe(self.table_name, df)
+            print("Insertion tags terminée!!")
+        except Exception as e:
+            print("Erreur d'insertion :", e)

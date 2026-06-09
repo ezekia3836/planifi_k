@@ -9,13 +9,11 @@ from reporting.router2 import router as router2
 from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime
 from cron.Cron import Cron
-from config import config_gcs
 import os
 from dotenv import load_dotenv
 from config.ClickHouseConfig import ClickHouseConfig as client
 
 load_dotenv("app.env")
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     redis = Redis(host="localhost", port=6379)
@@ -35,19 +33,18 @@ expire_minutes = 4*60
 app.include_router(router2)
 app.include_router(
     create_auth_router(                             
-        client=client().getClient_prod(),
         secret_key=os.getenv("SECRET_KEY"),
         expire_minutes=expire_minutes
     )
 )
+cron = Cron()
 def job_cron():
     start = datetime.now()
-    cron = Cron()
     # cron.start_cache_batch()
     #cron.start_advertiser()
     #cron.start_cont()
     #cron.start_act()
-    cron.start_tags()
+    # cron.start_tags()
     #cron.start_agence()
     # cron.start_report_final()
     #cron.start_segment()
@@ -55,4 +52,4 @@ def job_cron():
 #scheduler = BackgroundScheduler()
 #scheduler.add_job(job_cron, 'interval', minutes=2)  # ex: toutes les 2 minutes
 #scheduler.start()
-job_cron()
+# job_cron()

@@ -10,20 +10,20 @@ class Stats(BaseModel):
     opens: int = 0
     openers: int = 0
     unsubs: int = 0
-
     taux_clickers: float = 0.0
     taux_cto: float = 0.0
     taux_unsubs: float = 0.0
-
 
 class Dimensions(BaseModel):
     age_range: Dict[str, Any] = Field(default_factory=dict)
     gender: Dict[str, Any] = Field(default_factory=dict)
     isp: Dict[str, Any] = Field(default_factory=dict)
+
 class ModelItem(BaseModel):
     model: str
     payvalue: float | None = None
     comment: str | None = None
+    
 class BrandItem(BaseModel):
     name: Optional[str] = None
     id_routers: List[int] = Field(default_factory=list)

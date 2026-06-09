@@ -1,7 +1,7 @@
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError
-
+from config.ClickHouseConfig import ClickHouseConfig
 bearer = HTTPBearer()
 
 
@@ -17,3 +17,10 @@ def make_auth_dependency(secret_key: str):
             raise HTTPException(status_code=401, detail="Token invalide ou expiré")
 
     return get_current_user
+def get_clk_client():
+    config = ClickHouseConfig()
+    client = config.getClient_prod()
+    try:
+        yield client
+    finally:
+        client.close()

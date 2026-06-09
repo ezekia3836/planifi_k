@@ -380,13 +380,11 @@ class reporting:
         count = self.clk.query(
             "SELECT count() FROM tmp_contacts"
         ).result_rows[0][0]
-
         logger.info(f"tmp_contacts prêt : {count} contacts uniques")
     def _insert_reporting(self, date_start: str, date_end: str):
         logger.info("INSERT INTO reporting en cours...")
         query = f"""
             INSERT INTO {self.table}
-
             SELECT
                 p.database_id                                            AS database_id,
                 d.ktk_id                                                  AS ktk_id,
@@ -409,7 +407,6 @@ class reporting:
                     'zipcode_vide',
                     trim(BOTH ' ' FROM toString(c.zipcode))
                 )                                                        AS zipcode,
-
                 if(
                     lower(trim(BOTH ' ' FROM ifNull(toString(c.dep), '')))
                         IN ('', 'none', 'null', 'o', 'other'),
@@ -493,10 +490,8 @@ class reporting:
                 now()                                                    AS updated_at
 
             FROM prod_events_2 p
-
             INNER JOIN databases d
                 ON d.id = p.database_id
-
             INNER JOIN tmp_focus_map f
                 ON f.id_router = toUInt64(p.MessageId)
                AND toInt64(f.database_id) = toInt64(d.stats_id)
