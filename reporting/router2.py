@@ -3,6 +3,8 @@ from service.cache import CacheManager
 from reporting.auto.data import data_auto
 from fastapi import APIRouter, Query, Depends
 import os
+from datetime import date,timedelta
+from dateutil.relativedelta import relativedelta
 from typing import Optional
 from dotenv import load_dotenv
 from user.dependencies import make_auth_dependency as curent_user
@@ -29,22 +31,28 @@ def cached_or_compute(key: str, compute_func):
     data = compute_func()
     CacheManager.set(key, data)
     return data
-
 @router.get(
     "/advertiser/{adv}",
     response_model=GlobalAdvertiserResponse,
     summary="Rapport global d'un advertiser"
 )
-async def get_adv(adv: int,
+async def get_adv(
+    adv: int,
+    tag_id: Optional[int] = Query(default=None, description="Filtrer par tag ex: 8"),
     date_schedule: Optional[str] = Query(default=None, description="Date exacte ex: 2024-01-15"),
-    date_start:    Optional[str] = Query(default=None, description="Début de plage ex: 2024-01-01"),
-    date_end:      Optional[str] = Query(default=None, description="Fin de plage ex: 2024-01-31")
+    date_start: Optional[str] = Query(default=None, description="Début de plage ex: 2024-01-01"),
+    date_end:   Optional[str] = Query(default=None, description="Fin de plage ex: 2024-01-31")
 ):
-    key = CacheManager.key("advertiser", adv,date_schedule,date_start,date_end)
+   
+    if not date_schedule and not (date_start and date_end):
+        today = date.today()
+        date_end   = str(today)
+        date_start = str(today - relativedelta(months=4))
 
+    key = CacheManager.key("advertiser", adv, tag_id, date_schedule, date_start, date_end)
     return cached_or_compute(
         key,
-        lambda: Query2().global_advertiser(adv,date_schedule,date_start,date_end)
+        lambda: Query2().global_advertiser(adv, tag_id, date_schedule, date_start, date_end)
     )
 @router.get(
     "/database/{base_id}",
@@ -57,6 +65,10 @@ async def get_base(
     date_start:    Optional[str] = Query(default=None, description="Début de plage ex: 2024-01-01"),
     date_end:      Optional[str] = Query(default=None, description="Fin de plage ex: 2024-01-31"),
 ):
+    if not date_schedule and not (date_start and date_end):
+        today = date.today()
+        date_end = str(today)
+        date_start = str(today - relativedelta(months=4))
     key = CacheManager.key("database", base_id, date_schedule, date_start, date_end)
     return cached_or_compute(
         key,
@@ -65,12 +77,15 @@ async def get_base(
 
 @router.get("/all_advertisers/", summary="Liste de tous les advertisers dans reporting")
 async def all_advertisers(
+    country: list[str] | None = Query(None),
     date_schedule: Optional[str] = None,
     date_start: Optional[str] = None,
     date_end: Optional[str] = None
 ):
+    country_key = ",".join(sorted(country)) if country else "None"
     key = CacheManager.key(
         "all_advertisers",
+        country_key,
         date_schedule or "None",
         date_start or "None",
         date_end or "None",
@@ -81,39 +96,47 @@ async def all_advertisers(
         lambda: Query2().all_advertisers(
             date_schedule=date_schedule,
             date_start=date_start,
-            date_end=date_end
+            date_end=date_end,
+            country = country,
         )
     )
 
 
 @router.get("/all_bases/", summary="Liste de toutes les bases dans reporting")
 async def all_bases(
+    tags: list[str] | None = Query(None),
     date_schedule: Optional[str] = None,
     date_start: Optional[str] = None,
     date_end: Optional[str] = None,
-    country: list[str] | None = Query(None),
-    tags: list[str] | None = Query(None)
+    country: list[str] | None = Query(None)
+    
+   
 ):
+    if not date_schedule and not (date_start and date_end):
+        today = date.today()
+        date_end = str(today)
+        date_start = str(today - relativedelta(months=4))
     country_key = ",".join(sorted(country)) if country else "None"
     tags_key = ",".join(sorted(tags)) if tags else "None"
 
     key = CacheManager.key(
         "all_bases",
+        tags_key,
         date_schedule or "None",
         date_start or "None",
         date_end or "None",
-        country_key,
-        tags_key
+        country_key
+        
     )
 
     return cached_or_compute(
         key,
         lambda: Query2().all_bases(
-            country=country,
             tags=tags,
             date_schedule=date_schedule,
             date_start=date_start,
-            date_end=date_end
+            date_end=date_end,
+            country=country
         )
     )
 
@@ -175,3 +198,10 @@ def filter_by_tags(
 ):
     dep = Query2().filter_by_tags(tag_id=tag_id, database_id=database_id)
     return dep
+
+@router.get('/country',summary="Liste pays")
+def list_country(
+    country_id: Optional[int]=None
+):
+    country = Query2().get_country(country_id=country_id)
+    return country

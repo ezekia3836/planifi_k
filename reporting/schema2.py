@@ -83,7 +83,6 @@ class BaseItem(BaseModel):
     ecpm: float = 0.0
     classification: str = ""
     dimensions: Dimensions = Field(default_factory=Dimensions)
-    recommendation_segments: AnalyseDimensions = Field(default_factory=AnalyseDimensions)
 
 class DepStatsModel(BaseModel):
     clickers: int =0
@@ -106,6 +105,7 @@ class GlobalAdvertiserStats(BaseModel):
     taux_cto: float = 0.0
     analyses: Dict[str, str] = Field(default_factory=dict)
     analyse_dep: Dict[str, DepStatsModel] = Field(default_factory=dict)
+    recommendation_segments: AnalyseDimensions = Field(default_factory=AnalyseDimensions)
 
 class GlobalAdvertiserResponse(BaseModel):
     advertiser_id: str
@@ -129,6 +129,8 @@ class GobalBaseStats(BaseModel):
     taux_cto: float = 0.0
     analyses: Dict[str, str] = Field(default_factory=dict)
     analyse_dep: Dict[str, DepStatsModel] = Field(default_factory=dict)
+    recommendation_segments: AnalyseDimensions = Field(default_factory=AnalyseDimensions)
+    
 
 class AdvertiserItem(BaseModel):
     advertiser_id: int
@@ -148,7 +150,7 @@ class AdvertiserItem(BaseModel):
     taux_cto: float = 0.0
     classification: str = ""
     dimensions: Dimensions = Field(default_factory=Dimensions)
-    recommendation_segments: AnalyseDimensions = Field(default_factory=AnalyseDimensions)
+
 
 class GlobalBaseResponse(BaseModel):
     database_id: str

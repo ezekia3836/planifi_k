@@ -488,7 +488,6 @@ class reporting:
                 ''                                                       AS optimized,
                 f.date_schedule_max                                      AS date_schedule_max,
                 now()                                                    AS updated_at
-
             FROM prod_events_2 p
             INNER JOIN databases d
                 ON d.id = p.database_id
