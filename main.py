@@ -40,7 +40,7 @@ app.include_router(
 cron = Cron()
 def job_cron():
     start = datetime.now()
-    cron.start_cache_batch()
+    # cron.start_cache_batch()
     #cron.start_advertiser()
     #cron.start_cont()
     #cron.start_act()

@@ -55,7 +55,14 @@ class BrandItem(BaseModel):
 
 class DimensionItem(BaseModel):
     value: str
-    ctr: float
+    sends: float
+    clickers: int
+    openers: int
+    unsubs:int
+    taux_clickers:float
+    taux_openers:float
+    taux_unsubs:float
+    taux_cto: float
 
 class DimensionAnalysis(BaseModel):
     privilegier: Optional[List[DimensionItem]] = None
@@ -113,7 +120,6 @@ class GlobalAdvertiserResponse(BaseModel):
     globales: GlobalAdvertiserStats = Field(default_factory=GlobalAdvertiserStats)
     bases: List[BaseItem] = Field(default_factory=list)
 
-
 class GobalBaseStats(BaseModel):
     sends: int = 0
     clicks: int = 0
@@ -131,7 +137,6 @@ class GobalBaseStats(BaseModel):
     analyse_dep: Dict[str, DepStatsModel] = Field(default_factory=dict)
     recommendation_segments: AnalyseDimensions = Field(default_factory=AnalyseDimensions)
     
-
 class AdvertiserItem(BaseModel):
     advertiser_id: int
     advertiser_name: Optional[str] = None

@@ -67,7 +67,6 @@ class CacheManager:
         return (
             f"{name}:"
             + ":".join(map(str, args))
-            + f":{CacheManager.today()}"
         )
 
     @staticmethod
