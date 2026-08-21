@@ -20,7 +20,7 @@ METRICS_KEY=("sends","clicks","clickers","opens","openers","unsubs")
 class Query2:
     def __init__(self):
         self.analyze = analyse()
-        self.table = "clean_reporting"
+        self.table = "prod_reporting"
         self.segment_index = self.build_segment_index()
     
     def _execute_query(self, query, params=None):
@@ -90,170 +90,150 @@ class Query2:
         return result
     
     def build_dimension_analysis(self, dim_data: dict, dim_name: str = "") -> dict:
-        def _empty_values(value:str=""):
+
+        def _empty_values(value=""):
             return {
-                "value":value,
-                "sends":0,
-                "clickers":0,
-                "openers":0,
-                "unsubs":0,
-                "taux_clickers":0.0,
-                "taux_openers":0.0,
-                "taux_unsubs":0.0,
-                "taux_cto":0.0,
-                "score":0,
-                "score_z":0,
+                "value": value,
+                "sends": 0,
+                "clickers": 0,
+                "openers": 0,
+                "unsubs": 0,
+                "taux_clickers": 0.0,
+                "taux_openers": 0.0,
+                "taux_unsubs": 0.0,
+                "taux_cto": 0.0,
+                "score": 0.0,
             }
-        EXCLUDE = {"age_range": {"0-18", "O_age"},"isp":  {"O_isp"},}
-        empty = {"privilegier": [_empty_values()], "eviter": [_empty_values()]}
-        if not dim_data:
-            return empty
+
+        EXCLUDE = {
+            "age_range": {"0-18", "O_age"},
+            "isp": {"O_isp"},
+        }
 
         excluded = EXCLUDE.get(dim_name, set())
+
+        MIN_SENDS = 1000
+        MIN_CLICKERS = 5
+
         rows = []
+
         for key, val in dim_data.items():
+
             if key in excluded:
                 continue
 
-            sends    = val.get("sends",    0) or 0
-            clickers = val.get("clickers", 0) or 0
-            openers  = val.get("openers",  0) or 0
-            unsubs   = val.get("unsubs",   0) or 0
+            sends = int(val.get("sends", 0) or 0)
+            clickers = int(val.get("clickers", 0) or 0)
+            openers = int(val.get("openers", 0) or 0)
+            unsubs = int(val.get("unsubs", 0) or 0)
 
-            if sends <= 0:
+            if sends < MIN_SENDS:
                 continue
 
-            # if clickers > sends or openers > sends or unsubs > sends:
-                # continue
+            if clickers < MIN_CLICKERS:
+                continue
 
-            openers  = min(openers,  sends)
-            clickers = min(clickers, openers) if openers else min(clickers, sends)
-            unsubs   = min(unsubs,   sends)
+            openers = min(openers, sends)
+            clickers = min(clickers, sends)
+            unsubs = min(unsubs, sends)
 
-            ctr     = clickers / sends
-            ctor    = clickers / openers if openers else 0
-            open_r  = openers  / sends
-            unsub_r = unsubs   / sends
+            ctr = clickers / sends
+            open_rate = openers / sends
+            unsub_rate = unsubs / sends
+            cto = clickers / openers if openers else 0
 
             rows.append({
-                "value":    key,
-                "sends":    sends,
+                "value": key,
+                "sends": sends,
                 "clickers": clickers,
-                "openers":  openers,
-                "unsubs":   unsubs,
-                "ctr":      ctr,
-                "ctor":     ctor,
-                "open_r":   open_r,
-                "unsub_r":  unsub_r,
+                "openers": openers,
+                "unsubs": unsubs,
+                "ctr": ctr,
+                "open_rate": open_rate,
+                "unsub_rate": unsub_rate,
+                "cto": cto,
             })
 
         if not rows:
-            return empty
+            return {
+                "privilegier": [_empty_values()],
+                "eviter": [_empty_values()],
+            }
 
-        # ── 2. Médiane de référence ───────────────────────────────────────────────
-        MIN_SENDS = 500
-        valid = [r for r in rows if r["sends"] >= MIN_SENDS] or rows
-
-        ctr_values  = [r["ctr"]  for r in valid] or [0.005]
-        ctor_values = [r["ctor"] for r in valid if r["ctor"] > 0] or [0.05]
-        ctr_median  = statistics.median(ctr_values)
-        ctor_median = statistics.median(ctor_values)
-
-        # ── 3. Scoring composite normalisé ───────────────────────────────────────
-        K               = 200
-        W_CTR           = 0.55
-        W_CTOR          = 0.45
-        UNSUB_THRESHOLD = 0.003   # 0.30%
-        UNSUB_HARD_CAP  = 0.005   # 0.50%
+        max_clickers = max(r["clickers"] for r in rows)
+        max_sends = max(r["sends"] for r in rows)
+        max_ctr = max(r["ctr"] for r in rows)
+        max_open_rate = max(r["open_rate"] for r in rows)
 
         for r in rows:
-            ctr_smooth  = (r["sends"] * r["ctr"]  + K * ctr_median)  / (r["sends"] + K)
-            ctor_smooth = (r["sends"] * r["ctor"] + K * ctor_median) / (r["sends"] + K)
 
-            ctr_norm  = ctr_smooth  / ctr_median  if ctr_median  > 0 else 1.0
-            ctor_norm = ctor_smooth / ctor_median if ctor_median > 0 else 1.0
-
-            if r["unsub_r"] <= UNSUB_THRESHOLD:
-                unsub_penalty = 0.0
-            else:
-                excess        = r["unsub_r"] - UNSUB_THRESHOLD
-                cap           = UNSUB_HARD_CAP - UNSUB_THRESHOLD
-                unsub_penalty = min(excess / cap, 1.0) * 1.5
-
-            r["score"] = W_CTR * ctr_norm + W_CTOR * ctor_norm - unsub_penalty
-
-        # ── 4. Tri et score_z ────────────────────────────────────────────────────
-        ranked       = sorted(rows, key=lambda x: x["score"], reverse=True)
-        scores       = [r["score"] for r in ranked]
-        score_median = statistics.median(scores)
-        score_std    = statistics.pstdev(scores) or 0.1
-
-        for r in ranked:
-            r["score_z"] = (r["score"] - score_median) / score_std
-
-        # ── 5. privilegier — fallback progressif ─────────────────────────────────
-        # Niveau 1 : critères stricts
-        good = [
-            r for r in ranked
-            if r["score_z"] >= 0.5
-            and r["unsub_r"] < UNSUB_THRESHOLD
-            and r["sends"]   >= MIN_SENDS
-        ]
-        # Niveau 2 : relâcher score_z
-        if not good:
-            good = [
-                r for r in ranked
-                if r["unsub_r"] < UNSUB_THRESHOLD
-                and r["sends"]  >= MIN_SENDS
-            ][:2]
-        # Niveau 3 : relâcher unsub
-        if not good:
-            good = [
-                r for r in ranked
-                if r["sends"] >= MIN_SENDS
-            ][:2]
-        # Niveau 4 : tout relâcher
-        if not good:
-            good = ranked[:1]
-
-        top        = good[:1]
-        top_values = {t["value"] for t in top}
-
-        bad = [
-            r for r in ranked
-            if r["value"] not in top_values
-            and (
-                r["score_z"] <= -0.5
-                or r["unsub_r"] >= UNSUB_HARD_CAP
+            click_score = (
+                r["clickers"] / max_clickers
+                if max_clickers
+                else 0
             )
-        ]
-       
-        if not bad and len(ranked) >= 2:
-            bad = [r for r in ranked if r["value"] not in top_values]
 
-        if bad:
-            worst = max(bad, key=lambda x: (x["unsub_r"], -x["score"]))
-        else:
-            worst = None
+            ctr_score = (
+                r["ctr"] / max_ctr
+                if max_ctr
+                else 0
+            )
+
+            open_score = (
+                r["open_rate"] / max_open_rate
+                if max_open_rate
+                else 0
+            )
+
+            confidence_score = min(
+                math.log10(r["sends"] + 1)
+                / math.log10(max_sends + 1),
+                1.0,
+            )
+
+            unsub_penalty = min(
+                r["unsub_rate"] / 0.005,
+                1.0,
+            )
+
+            r["score"] = (
+                0.45 * click_score +
+                0.25 * ctr_score +
+                0.15 * open_score +
+                0.15 * confidence_score -
+                0.30 * unsub_penalty
+            )
+
+        ranked = sorted(
+            rows,
+            key=lambda x: x["score"],
+            reverse=True,
+        )
+
+        top = ranked[:1]
+
+        worst = min(
+            ranked,
+            key=lambda x: x["score"]
+        )
 
         def _fmt(r):
             return {
-                "value":         r["value"],
-                "sends":         r["sends"],
-                "clickers":      r["clickers"],
-                "openers":       r["openers"],
-                "unsubs":        r["unsubs"],
-                "taux_clickers": round(r["ctr"]     * 100, 4),
-                "taux_openers":  round(r["open_r"]  * 100, 4),
-                "taux_unsubs":   round(r["unsub_r"] * 100, 3),
-                "taux_cto":      round(r["ctor"]    * 100, 3),
-                "score":         round(r["score"],   4),
-                "score_z":       round(r["score_z"], 2),
+                "value": r["value"],
+                "sends": r["sends"],
+                "clickers": r["clickers"],
+                "openers": r["openers"],
+                "unsubs": r["unsubs"],
+                "taux_clickers": round(r["ctr"] * 100, 4),
+                "taux_openers": round(r["open_rate"] * 100, 4),
+                "taux_unsubs": round(r["unsub_rate"] * 100, 4),
+                "taux_cto": round(r["cto"] * 100, 4),
+                "score": round(r["score"], 4),
             }
 
         return {
-            "privilegier": [_fmt(r) for r in top] or [_empty_values()],
-            "eviter": [_fmt(worst)]  if worst else [_empty_values()],
+            "privilegier": [_fmt(r) for r in top],
+            "eviter": [_fmt(worst)],
         }
     def _safe_analyse_dimensions(self, dimensions: dict) -> dict:
         return {
@@ -382,13 +362,12 @@ class Query2:
                 for seg in dim.values():
                     finalize_dim(seg)
 
-        groups            = {}
-        analyse_dep       = {}
-        total             = dict(sends=0, clicks=0, clickers=0, opens=0, openers=0, unsubs=0, ca=0)
+        groups  = {}
+        analyse_dep  = {}
+        total  = dict(sends=0, clicks=0, clickers=0, opens=0, openers=0, unsubs=0, ca=0)
         seen_focus_global = set()
-        found_any         = False
-        meta              = {}
-
+        found_any  = False
+        meta  = {}
         for r in self._stream_query(query, params):
             found_any = True
             pivot_val = r[pivot_key]
@@ -494,7 +473,6 @@ class Query2:
 
             for k, v in metrics.items():
                 total[k] += v
-
         if not found_any:
             top_key = "advertiser_id" if pivot_key == "database_id" else "database_id"
             top_val = str(params.get("adv_id") or params.get("db_id") or "")
@@ -505,7 +483,8 @@ class Query2:
             brands_list = []
             for brand in group["brands"].values():
                 finalize_dimensions(brand["dimensions"])
-
+                if brand["sends"] < brand["clickers"] or brand["sends"] < brand["openers"] or brand["sends"] < brand["unsubs"] or brand["sends"]==0:
+                    continue
                 tc, to, tu, cto = compute_rates(
                     brand["sends"], brand["openers"], brand["clickers"], brand["unsubs"])
                 brand.update(
@@ -595,9 +574,8 @@ class Query2:
             },
             group_label: sorted(result, key=lambda x: (x["clickers"], x["ecpm"]), reverse=True),
         }
-    def global_advertiser(self, adv_id, tag_id=None, date_schedule=None, 
-                      date_start=None, date_end=None,
-                      include_o_age=True, include_o_gender=True, include_o_isp=True,min_sends=100):
+    def global_advertiser(self, adv_id, tag_id=None, date_schedule=None, date_start=None, date_end=None,
+                      include_o_age=True, include_o_gender=True, include_o_isp=True,min_sends=0):
         tag_filtre = ''
         if tag_id:
             tag_filtre = f'AND t.tag_id=%(tag_id)s'
@@ -607,7 +585,6 @@ class Query2:
             date_filter = f"AND date_schedule_max BETWEEN '{date_start}' AND '{date_end}'"
         else:
             date_filter = ''
-
         exclude_filters = []
         if not include_o_age:
             exclude_filters.append("t.age_range != 'O_age'")
@@ -615,42 +592,62 @@ class Query2:
             exclude_filters.append("t.gender != 'O_gender'")
         if not include_o_isp:
             exclude_filters.append("t.main_isp != 'O_isp'")
-        
         other_filter = ('AND ' + ' AND '.join(exclude_filters)) if exclude_filters else ''
-
         query = f"""
-    WITH ca_by_focus AS (
-        SELECT id_focus, max(ca) AS ca
-        FROM {self.table} WHERE adv_id = %(adv_id)s GROUP BY id_focus
-    ),
-    base AS (
-        SELECT t.*, a.name AS advertiser_name,
-            startsWith(ifNull(t.ListName,''),'Z-DWH') AS is_zdwh
-        FROM {self.table} t
-        LEFT JOIN advertiser a ON a.id = t.adv_id
-        WHERE t.adv_id = %(adv_id)s {tag_filtre} {date_filter} {other_filter}
-    )
-    SELECT t.adv_id, t.database_id,
-        groupUniqArray(t.id_routers) AS id_routers,
-        any(t.tag_id) AS tag_id, max(t.clicks_val) AS clicks_val,
-        max(t.leads_val) AS leads_val, max(t.cpm_val) AS volume_val,
-        t.brand, any(t.model) AS models, any(t.client_id) AS client_id, any(t.optimized) AS optimized,
-        any(t.subject) AS subject, groupUniqArray(t.date_schedule) AS date_schedule, t.gender, t.age_range, t.main_isp,
-        t.id_focus, t.dep AS departement,
-        sum(t.sends) AS sends, sum(t.clicks) AS clicks,
-        sum(t.clickers) AS clickers,
-        sum(t.opens) AS opens,
-        sum(t.openers) AS openers,
-        countIf(t.unsubs > 0) AS unsubs,
-        any(f.ca) AS ca, any(t.advertiser_name) AS advertiser_name,
-        groupUniqArray(t.segmentId) AS segmentId,
-        groupUniqArrayIf(t.ListId,   t.is_zdwh) AS ListId,
-        groupUniqArrayIf(t.ListName, t.is_zdwh) AS ListName
-    FROM base t
-    LEFT JOIN ca_by_focus f ON f.id_focus = t.id_focus
-    GROUP BY t.adv_id, t.database_id, t.brand, t.gender, t.age_range, t.main_isp, t.id_focus, t.dep
-    HAVING sum(t.sends)>={min_sends}
-"""
+        WITH ca_by_focus AS (
+            SELECT id_focus, max(ca) AS ca
+            FROM {self.table} WHERE adv_id = %(adv_id)s GROUP BY id_focus
+        ),
+        focus_valides AS (
+            SELECT id_focus
+            FROM {self.table} t
+            WHERE t.adv_id = %(adv_id)s
+            GROUP BY id_focus
+            HAVING sum(sends) > {min_sends}
+        ),
+        base AS (
+            SELECT t.*, a.name AS advertiser_name,
+                startsWith(ifNull(t.ListName, ''), 'Z-DWH') AS is_zdwh
+            FROM {self.table} t
+            LEFT JOIN advertiser a ON a.id = t.adv_id
+            INNER JOIN focus_valides fv ON fv.id_focus = t.id_focus
+            WHERE t.adv_id = %(adv_id)s {tag_filtre} {date_filter} {other_filter}
+        )
+        SELECT
+            t.adv_id                                        AS adv_id,
+            t.database_id                                   AS database_id,
+            groupUniqArray(t.id_routers)                    AS id_routers,
+            any(t.tag_id)                                   AS tag_id,
+            max(t.clicks_val)                               AS clicks_val,
+            max(t.leads_val)                                AS leads_val,
+            max(t.cpm_val)                                  AS volume_val,
+            t.brand                                         AS brand,
+            any(t.model)                                    AS models,
+            any(t.client_id)                                AS client_id,
+            any(t.optimized)                                AS optimized,
+            any(t.subject)                                  AS subject,
+            groupUniqArray(t.date_schedule)                 AS date_schedule,
+            t.gender                                        AS gender,
+            t.age_range                                     AS age_range,
+            t.main_isp                                      AS main_isp,
+            t.id_focus                                      AS id_focus,
+            t.dep                                           AS departement,
+            sum(sends)                                      AS sends,
+            sum(t.clicks)                                   AS clicks,
+            countIf(t.clicks > 0)                            AS clickers,
+            sum(t.opens)                                    AS opens,
+            uniqExactIf(t.dwh_id, t.opens > 0)               AS openers,
+            uniqExactIf(t.dwh_id, t.unsubs > 0)               AS unsubs,
+            any(f.ca)                                       AS ca,
+            any(t.advertiser_name)                          AS advertiser_name,
+            groupUniqArray(t.segmentId)                     AS segmentId,
+            groupUniqArrayIf(t.ListId,   t.is_zdwh)        AS ListId,
+            groupUniqArrayIf(t.ListName, t.is_zdwh)        AS ListName
+        FROM base t
+        LEFT JOIN ca_by_focus f ON f.id_focus = t.id_focus
+        GROUP BY t.adv_id, t.database_id, t.brand, t.gender, t.age_range, t.main_isp, t.id_focus, t.dep
+        HAVING sum(t.sends) > 0
+    """
         result = self._run_global(query, {"adv_id": adv_id, "tag_id": tag_id}, 
                                 pivot_key="database_id", group_label="bases")
         result["globales"]["analyse_dep"] = self._get_analyse_dep(
@@ -661,7 +658,9 @@ class Query2:
             )
         return result
 
-    def global_base(self, db_id, date_schedule=None, date_start=None, date_end=None,include_o_age=True,include_o_gender=True,include_o_isp=True, min_sends=100):
+    def global_base(self, db_id, date_schedule=None, date_start=None, date_end=None,
+                 include_o_age=True, include_o_gender=True, include_o_isp=True,
+                 min_sends=0):
         if date_schedule:
             date_filter = f"AND date_schedule_max = '{date_schedule}'"
         elif date_start and date_end:
@@ -675,50 +674,69 @@ class Query2:
             exclude_filters.append("t.gender != 'O_gender'")
         if not include_o_isp:
             exclude_filters.append("t.main_isp != 'O_isp'")
-        
+
         other_filter = ('AND ' + ' AND '.join(exclude_filters)) if exclude_filters else ''
         query = f"""
             WITH ca_by_focus AS (
                 SELECT id_focus, max(ca) AS ca
                 FROM {self.table} WHERE database_id = %(db_id)s GROUP BY id_focus
             ),
+            focus_valides AS (
+                SELECT id_focus
+                FROM {self.table} t
+                WHERE t.database_id = %(db_id)s
+                GROUP BY id_focus
+                HAVING sum(sends) > {min_sends}
+            ),
             base AS (
                 SELECT t.*, a.name AS advertiser_name,
                     startsWith(ifNull(t.ListName,''),'Z-DWH') AS is_zdwh
                 FROM {self.table} t
                 LEFT JOIN advertiser a ON a.id = t.adv_id
+                INNER JOIN focus_valides fv ON fv.id_focus = t.id_focus
                 WHERE t.database_id = %(db_id)s
                 AND t.adv_id != 0 
                 {date_filter} {other_filter}
             )
-            SELECT t.adv_id, t.database_id,
-                groupUniqArray(t.id_routers) AS id_routers,
-                any(t.tag_id) AS tag_id, any(t.model) AS models, t.brand, any(t.client_id) AS client_id,
-                any(t.optimized) AS optimized, any(t.subject) AS subject,  groupUniqArray(t.date_schedule) AS date_schedule, t.gender,
-                t.age_range, t.main_isp, t.id_focus, t.dep AS departement,
-                sum(t.sends) AS sends, 
-                sum(t.clicks) AS clicks,
-                countIf(t.clicks > 0) AS clickers,
-                sum(t.opens) AS opens,
-                countIf(t.opens > 0)  AS openers,
-                countIf(t.unsubs > 0) AS unsubs,
-                any(f.ca) AS ca,
-                MAX(t.clicks_val) AS clicks_val, MAX(t.leads_val) AS leads_val,
-                MAX(t.cpm_val) AS volume_val,
-                any(t.advertiser_name) AS advertiser_name,
-                groupUniqArray(t.segmentId) AS segmentId,
-                groupUniqArrayIf(t.ListId,   t.is_zdwh) AS ListId,
-                groupUniqArrayIf(t.ListName, t.is_zdwh) AS ListName
+            SELECT t.adv_id                                        AS adv_id,
+                t.database_id                                   AS database_id,
+                groupUniqArray(t.id_routers)                    AS id_routers,
+                any(t.tag_id)                                   AS tag_id,
+                max(t.clicks_val)                               AS clicks_val,
+                max(t.leads_val)                                AS leads_val,
+                max(t.cpm_val)                                  AS volume_val,
+                t.brand                                         AS brand,
+                any(t.model)                                    AS models,
+                any(t.client_id)                                AS client_id,
+                any(t.optimized)                                AS optimized,
+                any(t.subject)                                  AS subject,
+                groupUniqArray(t.date_schedule)                 AS date_schedule,
+                t.gender                                        AS gender,
+                t.age_range                                     AS age_range,
+                t.main_isp                                      AS main_isp,
+                t.id_focus                                      AS id_focus,
+                t.dep                                           AS departement,
+                sum(sends)                                      AS sends,
+                sum(t.clicks)                                   AS clicks,
+                uniqExactIf(t.dwh_id, t.clicks>0)              AS clickers,
+                sum(t.opens)                                    AS opens,
+                uniqExactIf(t.dwh_id, t.opens > 0)               AS openers,
+                uniqExactIf(t.dwh_id, t.unsubs > 0)               AS unsubs,
+                any(f.ca)                                       AS ca,
+                any(t.advertiser_name)                          AS advertiser_name,
+                groupUniqArray(t.segmentId)                     AS segmentId,
+                groupUniqArrayIf(t.ListId,   t.is_zdwh)         AS ListId,
+                groupUniqArrayIf(t.ListName, t.is_zdwh)         AS ListName
             FROM base t
             LEFT JOIN ca_by_focus f ON f.id_focus = t.id_focus
             GROUP BY t.adv_id, t.database_id,t.brand,t.gender, t.age_range, t.main_isp, t.id_focus, t.dep 
-            HAVING sum(t.sends)>={min_sends}
+            
         """
         result = self._run_global(query, {"db_id": db_id}, pivot_key="adv_id", group_label="advertisers")
         result["globales"]["analyse_dep"] = self._get_analyse_dep({"db_id": db_id}, "database_id", date_filter)
         return result
     
-    def all_advertisers(self, date_schedule=None, date_start=None, date_end=None, country=None):
+    def all_advertisers(self, date_schedule=None, date_start=None, date_end=None, country=None,min_sends=100):
         conditions = []
 
         if date_schedule:
@@ -773,14 +791,13 @@ class Query2:
                     adv_id,
                     tag_id,
                     id_focus,
-                    sum(sends)          AS sends,
-                    countIf(opens > 0)  AS openers,
-                    countIf(clicks > 0) AS clickers,
-                    countIf(unsubs > 0) AS unsubs,
+                    uniqExactIf(dwh_id, sends > 0)  AS sends,
+                    uniqExactIf(dwh_id, opens > 0)  AS openers,
+                    uniqExactIf(dwh_id, clicks > 0) AS clickers,
+                    uniqExactIf(dwh_id, unsubs > 0) AS unsubs,
                     max(ca)             AS ca
                 FROM base
                 GROUP BY adv_id, tag_id, id_focus
-                
             ),
             stats AS (
                 SELECT
@@ -792,6 +809,11 @@ class Query2:
                     sum(unsubs)   AS unsubs
                 FROM focus_agg
                 GROUP BY adv_id, tag_id
+                HAVING
+                    sum(sends) >= {min_sends}
+                    AND sum(sends) >= sum(openers)
+                    AND sum(sends) >= sum(clickers)
+                    AND sum(sends) >= sum(unsubs)
             ),
             ca_final AS (
                 SELECT
@@ -859,7 +881,7 @@ class Query2:
 
         return result
     
-    def all_bases(self, tags=None, date_schedule=None, date_start=None, date_end=None, country=None):
+    def all_bases(self, tags=None, date_schedule=None, date_start=None, date_end=None, country=None,min_sends=100):
         joins = []
         conditions = []
         if tags:
@@ -880,7 +902,11 @@ class Query2:
         join_clause = " ".join(joins)
         where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
 
-        if country:
+        # --- Gestion du filtre pays ---
+        if country == "all":
+            # Pas de filtre pays du tout : on retourne toutes les bases
+            country_filter = ""
+        elif country:
             if isinstance(country, str):
                 country = [country]
             country_values = ",".join(f"'{c}'" for c in country)
@@ -893,6 +919,7 @@ class Query2:
                 )
             """
         else:
+            # Comportement par défaut : filtre sur FR
             country_filter = f"""
                 AND s.database_id IN (
                     SELECT r.database_id
@@ -903,50 +930,57 @@ class Query2:
             """
 
         query = f"""
-            WITH filtered AS (
+           WITH filtered AS (
                 SELECT
                     r.database_id,
                     r.id_focus,
                     r.dwh_id,
                     r.sends,
-                    r.clicks,
-                    r.clickers,
-                    r.openers,
                     r.opens,
+                    r.clicks,
                     r.unsubs,
                     r.ca
                 FROM {self.table} r
                 {join_clause}
                 {where_clause}
             ),
-            stats AS (
-                SELECT
-                    database_id,
-                    sum(sends) AS sends,
-                    sum(clickers) AS clickers,
-                    sum(openers) AS openers,
-                    countIf(unsubs > 0) AS unsubs
-                FROM filtered
-                GROUP BY database_id
-                HAVING sends > 0
-            ),
 
-            ca_by_focus AS (
+            focus_agg AS (
                 SELECT
                     database_id,
                     id_focus,
-                    max(ca) AS ca
+                    uniqExactIf(dwh_id, sends > 0)  AS sends,
+                    uniqExactIf(dwh_id, opens > 0)  AS openers,
+                    uniqExactIf(dwh_id, clicks > 0) AS clickers,
+                    uniqExactIf(dwh_id, unsubs > 0) AS unsubs,
+                    max(ca)    AS ca
                 FROM filtered
                 GROUP BY
                     database_id,
                     id_focus
             ),
 
-            ca_unique AS (
+            stats AS (
+                SELECT
+                    database_id,
+                    sum(sends)    AS sends,
+                    sum(openers)  AS openers,
+                    sum(clickers) AS clickers,
+                    sum(unsubs)   AS unsubs
+                FROM focus_agg f
+                GROUP BY database_id
+                HAVING
+                    sum(f.sends) >= {min_sends}
+                    AND sum(f.sends) >= sum(f.openers)
+                    AND sum(f.sends) >= sum(f.clickers)
+                    AND sum(f.sends) >= sum(f.unsubs)
+            ),
+
+            ca_final AS (
                 SELECT
                     database_id,
                     sum(ca) AS ca_global
-                FROM ca_by_focus
+                FROM focus_agg
                 GROUP BY database_id
             )
 
@@ -954,25 +988,24 @@ class Query2:
                 s.database_id                                                    AS database_id,
                 d.basename                                                       AS basename,
                 s.sends                                                          AS sends,
-                s.clickers                                                       AS clickers,
                 s.openers                                                        AS openers,
+                s.clickers                                                       AS clickers,
                 s.unsubs                                                         AS unsubs,
-                coalesce(cu.ca_global, 0)                                        AS ca_global,
-                round(s.openers / nullIf(s.sends, 0) * 100, 3)                  AS taux_openers,
-                round(s.clickers / nullIf(s.sends, 0) * 100, 3)                 AS taux_clickers,
-                round(s.clickers / nullIf(s.openers, 0) * 100, 3)               AS taux_cto,
-                round(s.unsubs / nullIf(s.sends, 0) * 100, 3)                   AS taux_unsubs,
-                round(coalesce(cu.ca_global, 0) / nullIf(s.sends, 0) * 1000, 3) AS ecpm
+                coalesce(c.ca_global, 0)                                         AS ca_global,
+                round(s.openers / nullIf(s.sends, 0) * 100, 3)                   AS taux_openers,
+                round(s.clickers / nullIf(s.sends, 0) * 100, 3)                  AS taux_clickers,
+                round(s.clickers / nullIf(s.openers, 0) * 100, 3)                AS taux_cto,
+                round(s.unsubs / nullIf(s.sends, 0) * 100, 3)                    AS taux_unsubs,
+                round(coalesce(c.ca_global, 0) / nullIf(s.sends, 0) * 1000, 3)   AS ecpm
             FROM stats s
-            LEFT JOIN ca_unique cu
-                ON cu.database_id = s.database_id
+            LEFT JOIN ca_final c
+                ON c.database_id = s.database_id
             JOIN databases d
                 ON d.id = s.database_id
-            WHERE 1=1
+            WHERE 1 = 1
             {country_filter}
             ORDER BY s.sends DESC
         """
-
         rows = self._execute_query(query)
         result = []
         for row in rows:
@@ -980,7 +1013,6 @@ class Query2:
             openers  = row["openers"]  or 0
             clickers = row["clickers"] or 0
             unsubs   = row["unsubs"]   or 0
-
             result.append({
                 "database_id":   row["database_id"],
                 "database_name": row["basename"],
@@ -1153,18 +1185,14 @@ class Query2:
                     for r in rows
                 ]
 
-    def top_10_bases(self, tag_id=None, date_start: str = None, date_end: str = None, min_sends: int = 1000):
-
-        # --- Conditions WHERE sur la table principale ---
+    def top_10_bases(self, tag_id=None, date_start: str = None, date_end: str = None, country: str = 'FR', min_sends: int = 1000):
         where_conditions = []
-
         if tag_id:
             if isinstance(tag_id, list):
                 tag_values = ", ".join(str(t) for t in tag_id)
                 where_conditions.append(f"t.tag_id IN ({tag_values})")
             else:
                 where_conditions.append(f"t.tag_id = {tag_id}")
-
         if date_start:
             where_conditions.append(f"t.date_schedule_max >= toDate('{date_start}')")
         if date_end:
@@ -1172,6 +1200,7 @@ class Query2:
 
         where_conditions.append("t.tag_id != 0")
         where_conditions.append("t.database_id != 0")
+        where_conditions.append(f"c.country_code = '{country}'")
 
         where_clause = "WHERE " + " AND ".join(where_conditions)
 
@@ -1180,11 +1209,13 @@ class Query2:
             SELECT
                 t.tag_id,
                 t.database_id,
-                any(d.basename)  AS base_name,
-                sum(t.sends)     AS sends,
-                sum(t.clickers)  AS clickers
+                any(d.basename)     AS base_name,
+                any(c.country_code) AS country_code,
+                sum(t.sends)        AS sends,
+                sum(t.clickers)     AS clickers
             FROM {self.table} t
             LEFT JOIN databases d ON d.id = t.database_id
+            LEFT JOIN country c   ON c.id = t.country
             {where_clause}
             GROUP BY t.tag_id, t.database_id
             HAVING sends >= {min_sends}
@@ -1193,6 +1224,7 @@ class Query2:
             tag_id,
             database_id,
             base_name,
+            country_code,
             sends,
             clickers,
             round(clickers * 100.0 / nullIf(sends, 0), 2)                      AS click_rate,
@@ -1208,6 +1240,7 @@ class Query2:
                 "tag_id":        r["tag_id"],
                 "database_id":   r["database_id"],
                 "base_name":     r["base_name"],
+                "country_code":  r["country_code"],
                 "sends":         r["sends"],
                 "clickers":      r["clickers"],
                 "taux_clickers": r["click_rate"],
@@ -1216,10 +1249,10 @@ class Query2:
             for r in result
         ]
     
-    def top_advertisers_by_tag(self, tag_id=None, date_start=None, date_end=None, sort_by="ecpm"):
+    def top_advertisers_by_tag(self, tag_id=None, date_start=None, date_end=None, sort_by="ecpm", country: str = 'FR'):
         ALLOWED_SORT_FIELDS = {
             "weighted_score": "weighted_score DESC, click_rate DESC",
-            "clicks":     "click_rate DESC, weighted_score DESC",
+            "clicks":         "click_rate DESC, weighted_score DESC",
             "ca":             "total_ca DESC, click_rate DESC",
             "ecpm":           "ecpm DESC, click_rate DESC",
         }
@@ -1236,28 +1269,29 @@ class Query2:
         query = f"""
         WITH focus_agg AS (
             SELECT
-                tag_id,
-                adv_id,
-                id_focus,
-                toMonth(date_schedule_max)                                     AS month,
-                sum(sends)                                                     AS sends,
-                countIf(opens > 0)                                             AS openers,
-                countIf(clickers > 0)                                          AS clickers,
-                countIf(unsubs > 0)                                            AS unsubs,
-                max(ca)                                                        AS ca,
-                groupUniqArray(date_schedule_max)                              AS send_days,
-                groupUniqArray(toDayOfWeek(date_schedule_max))                 AS send_weekdays,
+                t.tag_id,
+                t.adv_id,
+                t.id_focus,
+                toMonth(t.date_schedule_max)                                   AS month,
+                sum(t.sends)                                                   AS sends,
+                countIf(t.opens > 0)                                           AS openers,
+                countIf(t.clickers > 0)                                        AS clickers,
+                countIf(t.unsubs > 0)                                          AS unsubs,
+                max(t.ca)                                                      AS ca,
+                groupUniqArray(t.date_schedule_max)                            AS send_days,
+                groupUniqArray(toDayOfWeek(t.date_schedule_max))               AS send_weekdays,
                 groupUniqArray(
-                    intDiv(toDayOfMonth(date_schedule_max) - 1, 7) + 1
+                    intDiv(toDayOfMonth(t.date_schedule_max) - 1, 7) + 1
                 )                                                              AS send_weeks
-            FROM {self.table}
-            WHERE date_schedule_max BETWEEN '{date_start}' AND '{date_end}'
-                AND tag_id != 0
+            FROM {self.table} t
+            LEFT JOIN country c ON c.id = t.country
+            WHERE t.date_schedule_max BETWEEN '{date_start}' AND '{date_end}'
+                AND t.tag_id != 0
+                AND c.country_code = '{country}'
                 {where_tag}
-            GROUP BY tag_id, adv_id, id_focus, month
+            GROUP BY t.tag_id, t.adv_id, t.id_focus, month
         ),
 
-        -- Stats globales par (tag, month) — directo depuis focus_agg
         tag_stats AS (
             SELECT
                 tag_id,
@@ -1276,7 +1310,6 @@ class Query2:
             GROUP BY tag_id, month
         ),
 
-        -- Stats par (tag, adv, month) — directo depuis focus_agg
         adv_stats AS (
             SELECT
                 tag_id,
@@ -1300,10 +1333,9 @@ class Query2:
                     2
                 ) AS weighted_score
             FROM focus_agg f
-            GROUP BY tag_id, adv_id, month
+            GROUP BY tag_id, adv_id, month HAVING sum(f.sends) > 0
         ),
 
-        -- Ranking des advertisers par (tag, month)
         ranked_advs AS (
             SELECT
                 a.*,
@@ -1316,12 +1348,11 @@ class Query2:
             LEFT JOIN advertiser adv ON adv.id = a.adv_id
         )
 
-        -- Jointure tag_stats + top5 groupé
         SELECT
-            ts.tag_id AS tag_id,
-            tg.tag     AS tag_name,
-            ts.month AS month,
-            ts.ecpm    AS global_ecpm,
+            ts.tag_id   AS tag_id,
+            tg.tag      AS tag_name,
+            ts.month    AS month,
+            ts.ecpm     AS global_ecpm,
             groupArrayIf(
                 (
                     ra.rank,
@@ -1365,7 +1396,6 @@ class Query2:
                     "months":   {},
                 }
 
-            # Trier le tableau top5 par rank et construire les dicts
             top5_sorted = sorted(r["top5_raw"] or [], key=lambda x: x[0])
             top5 = []
             for adv in top5_sorted:
@@ -1373,6 +1403,9 @@ class Query2:
                     rank, adv_id, adv_name, click_rate, ecpm, total_ca,
                     weighted_score, send_days, send_weekdays, send_weeks
                 ) = adv
+
+                if not click_rate and not ecpm and not total_ca:
+                    continue
                 top5.append({
                     "rank":          rank,
                     "adv_id":        adv_id,
@@ -1387,7 +1420,8 @@ class Query2:
                     ],
                     "semaines": [f"S{w}" for w in (send_weeks or [])],
                 })
-
+            if not global_ecpm and not top5:
+                continue
             output[t_id]["months"][month] = {
                 "global": {
                     "ecpm":   global_ecpm,
@@ -1397,4 +1431,8 @@ class Query2:
                 "sort_by": sort_by,
             }
 
-        return list(output.values())
+        return [
+            tag_data
+            for tag_data in output.values()
+            if tag_data["months"]
+        ]

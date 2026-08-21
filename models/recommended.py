@@ -3,7 +3,6 @@ from datetime import date
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 
-# Colonnes autorisées pour le tri — protège contre toute injection SQL
 SORT_OPTIONS = {
     "ecpm":     "ecpm DESC, click_rate DESC",
     "clickers": "click_rate DESC, ecpm DESC",
@@ -15,42 +14,34 @@ DEFAULT_SORT = "ecpm"
 class Recommended(Query2):
     def __init__(self):
         super().__init__()
-
-    # ------------------------------------------------------------------ #
-    #  Helpers                                                             #
-    # ------------------------------------------------------------------ #
-
     @staticmethod
     def _resolve_order(sort_by: str) -> str:
         sort_by = sort_by.lower()
         if sort_by not in SORT_OPTIONS:
             raise ValueError(
-                f"sort_by invalide : '{sort_by}'. "
+              f"sort_by invalide : '{sort_by}'. "
                 f"Valeurs acceptées : {list(SORT_OPTIONS)}"
             )
         return SORT_OPTIONS[sort_by]
-
-    # ------------------------------------------------------------------ #
-    #  Query builders                                                      #
-    # ------------------------------------------------------------------ #
 
     def _build_top_tags_query(self, where_clause, order_by, min_sends=1000, limit=10):
         return f"""
         WITH focus_agg AS (
             SELECT
-                tag_id,
-                id_focus,
-                sum(sends)            AS total_sends,
-                countIf(opens > 0)    AS total_openers,
-                countIf(clickers > 0) AS total_clickers,
-                countIf(unsubs > 0)   AS total_unsubs,
-                max(ca)               AS ca_focus
-            FROM {self.table}
+                t.tag_id,
+                t.id_focus,
+                sum(t.sends)            AS total_sends,
+                countIf(t.opens > 0)    AS total_openers,
+                countIf(t.clickers > 0) AS total_clickers,
+                countIf(t.unsubs > 0)   AS total_unsubs,
+                max(t.ca)               AS ca_focus
+            FROM {self.table} t
+            LEFT JOIN country c ON c.id = t.country
             WHERE {where_clause}
-                AND tag_id      != 0
-                AND adv_id      != 0
-                AND database_id != 0
-            GROUP BY tag_id, id_focus
+                AND t.tag_id      != 0
+                AND t.adv_id      != 0
+                AND t.database_id != 0
+            GROUP BY t.tag_id, t.id_focus
         ),
         stats AS (
             SELECT
@@ -78,8 +69,7 @@ class Recommended(Query2):
             row_number() OVER (ORDER BY {order_by}) AS rank
         FROM stats s
         LEFT JOIN tags tg ON tg.id = s.tag_id
-        WHERE ecpm  > 1
-          AND sends >= {min_sends}
+          
         ORDER BY rank
         LIMIT {limit}
         """
@@ -87,25 +77,25 @@ class Recommended(Query2):
     def _build_top_advertisers_for_tags_query(
         self, where_clause, tag_ids, order_by, min_sends=500, limit=10
     ):
-        """Une seule query pour tous les tags — PARTITION BY tag_id."""
         tag_ids_sql = ", ".join(str(t) for t in tag_ids)
         return f"""
         WITH focus_agg AS (
             SELECT
-                tag_id,
-                adv_id,
-                id_focus,
-                sum(sends)            AS total_sends,
-                countIf(opens > 0)    AS total_openers,
-                countIf(clickers > 0) AS total_clickers,
-                countIf(unsubs > 0)   AS total_unsubs,
-                max(ca)               AS ca_focus
-            FROM {self.table}
+                t.tag_id,
+                t.adv_id,
+                t.id_focus,
+                sum(t.sends)            AS total_sends,
+                countIf(t.opens > 0)    AS total_openers,
+                countIf(t.clickers > 0) AS total_clickers,
+                countIf(t.unsubs > 0)   AS total_unsubs,
+                max(t.ca)               AS ca_focus
+            FROM {self.table} t
+            LEFT JOIN country c ON c.id = t.country
             WHERE {where_clause}
-                AND tag_id      IN ({tag_ids_sql})
-                AND adv_id      != 0
-                AND database_id != 0
-            GROUP BY tag_id, adv_id, id_focus
+                AND t.tag_id IN ({tag_ids_sql})
+                AND t.adv_id      != 0
+                AND t.database_id != 0
+            GROUP BY t.tag_id, t.adv_id, t.id_focus
         ),
         stats AS (
             SELECT
@@ -135,9 +125,8 @@ class Recommended(Query2):
                     PARTITION BY tag_id
                     ORDER BY {order_by}
                 ) AS rank
-            FROM stats
-            WHERE ecpm  > 1
-              AND sends >= {min_sends}
+            FROM stats WHERE sends >= {min_sends}
+              
         )
         SELECT
             r.*,
@@ -149,29 +138,29 @@ class Recommended(Query2):
         """
 
     def _build_all_bases_query(
-        self, where_clause, tag_adv_pairs, order_by, limit=10,min_sends=500
+        self, where_clause, tag_adv_pairs, order_by, limit=10, min_sends=500
     ):
-        """Une seule query pour toutes les paires (tag_id, adv_id) — sans filtre min_sends/ecpm."""
         pairs_sql = ", ".join(
             f"({tag_id}, {adv_id})" for tag_id, adv_id in tag_adv_pairs
         )
         return f"""
         WITH focus_agg AS (
             SELECT
-                tag_id,
-                adv_id,
-                database_id,
-                id_focus,
-                sum(sends)            AS total_sends,
-                countIf(opens > 0)    AS total_openers,
-                countIf(clickers > 0) AS total_clickers,
-                countIf(unsubs > 0)   AS total_unsubs,
-                max(ca)               AS ca_focus
-            FROM {self.table}
+                t.tag_id,
+                t.adv_id,
+                t.database_id,
+                t.id_focus,
+                sum(t.sends)            AS total_sends,
+                countIf(t.opens > 0)    AS total_openers,
+                countIf(t.clickers > 0) AS total_clickers,
+                countIf(t.unsubs > 0)   AS total_unsubs,
+                max(t.ca)               AS ca_focus
+            FROM {self.table} t
+            LEFT JOIN country c ON c.id = t.country
             WHERE {where_clause}
-                AND (tag_id, adv_id) IN ({pairs_sql})
-                AND database_id != 0
-            GROUP BY tag_id, adv_id, database_id, id_focus
+                AND (t.tag_id, t.adv_id) IN ({pairs_sql})
+                AND t.database_id != 0
+            GROUP BY t.tag_id, t.adv_id, t.database_id, t.id_focus
         ),
         stats AS (
             SELECT
@@ -203,6 +192,7 @@ class Recommended(Query2):
                     ORDER BY {order_by}
                 ) AS rank
             FROM stats WHERE sends >={min_sends}
+            
         )
         SELECT
             r.*,
@@ -213,11 +203,8 @@ class Recommended(Query2):
         ORDER BY tag_id, adv_id, rank
         """
 
-    # ------------------------------------------------------------------ #
-    #  Date helpers                                                        #
-    # ------------------------------------------------------------------ #
 
-    def _get_where_clauses(self):
+    def _get_where_clauses(self, country: str = 'FR'):
         today = date.today()
         current_month = today.month
         next_month = (current_month % 12) + 1
@@ -226,8 +213,8 @@ class Recommended(Query2):
         date_end_current = today.strftime("%Y-%m-%d")
 
         return (
-            f"date_schedule_max BETWEEN '{date_start_current}' AND '{date_end_current}'",
-            f"toMonth(date_schedule_max) = {next_month}",
+            f"date_schedule_max BETWEEN '{date_start_current}' AND '{date_end_current}' AND c.country_code = '{country}'",
+            f"toMonth(date_schedule_max) = {next_month} AND c.country_code = '{country}'",
         )
 
     # ------------------------------------------------------------------ #
@@ -236,27 +223,25 @@ class Recommended(Query2):
 
     @staticmethod
     def _fmt_base_stats(r):
+        if r["sends"] < r["clickers"] or r["sends"] < r["openers"] or r["sends"] < r["unsubs"] or r["sends"]==0:
+            return None
         return {
             "rank":           r["rank"],
             "sends":          r["sends"],
-            "openers":        r["openers"] if r["openers"] else 0,
-            "clickers":       r["clickers"] if r["clickers"] else 0,
-            "unsubs":         r["unsubs"] if r["unsubs"] else 0,
-            "total_ca":       r["total_ca"] if r["total_ca"] else 0,
-            "open_rate":      r["open_rate"] if r["open_rate"] else 0,
-            "click_rate":     r["click_rate"] if r["click_rate"] else 0,
-            "taux_cto":       r["taux_cto"] if r["taux_cto"] else 0,
-            "taux_unsubs":    r["taux_unsubs"] if r["taux_unsubs"] else 0,
-            "ecpm":           r["ecpm"] if r["ecpm"] else 0,
+            "openers":        r["openers"] or 0,
+            "clickers":       r["clickers"] or 0,
+            "unsubs":         r["unsubs"] or 0,
+            "total_ca":       r["total_ca"] or 0,
+            "open_rate":      r["open_rate"] or 0,
+            "click_rate":     r["click_rate"] or 0,
+            "taux_cto":       r["taux_cto"] or 0,
+            "taux_unsubs":    r["taux_unsubs"] or 0,
+            "ecpm":           r["ecpm"] or 0,
             "weighted_score": r["weighted_score"],
         }
 
-    # ------------------------------------------------------------------ #
-    #  Core hierarchical builder  — 3 queries au lieu de 111              #
-    # ------------------------------------------------------------------ #
 
     def _build_hierarchy(self, where_clause, order_by):
-        # 1. Top 10 tags
         top_tags = self._execute_query(
             self._build_top_tags_query(where_clause, order_by)
         )
@@ -265,21 +250,15 @@ class Recommended(Query2):
 
         tag_ids = [r["tag_id"] for r in top_tags]
 
-        # 2. Top 10 advertisers pour tous les tags en une seule query
         all_advs = self._execute_query(
             self._build_top_advertisers_for_tags_query(where_clause, tag_ids, order_by)
         )
 
-        # Regroupement advertisers par tag_id
         advs_by_tag = defaultdict(list)
         for row in all_advs:
             advs_by_tag[row["tag_id"]].append(row)
 
-        # 3. Top 10 bases pour toutes les paires (tag_id, adv_id) en une seule query
-        tag_adv_pairs = [
-            (row["tag_id"], row["adv_id"])
-            for row in all_advs
-        ]
+        tag_adv_pairs = [(row["tag_id"], row["adv_id"]) for row in all_advs]
 
         bases_by_tag_adv = defaultdict(list)
         if tag_adv_pairs:
@@ -289,63 +268,57 @@ class Recommended(Query2):
             for b in all_bases:
                 bases_by_tag_adv[(b["tag_id"], b["adv_id"])].append(b)
 
-        # Assemblage
         result = []
         for tag_row in top_tags:
-            tag_id = tag_row["tag_id"]
+            tag_stats = self._fmt_base_stats(tag_row)
+            if tag_stats is None:
+                continue  # on ignore les tags qui échouent au test de cohérence
 
+            tag_id = tag_row["tag_id"]
             tag_entry = {
-                **self._fmt_base_stats(tag_row),
+                **tag_stats,
                 "tag_id":      tag_id,
                 "tag_name":    tag_row["tag_name"],
                 "advertisers": [],
             }
-
             for adv_row in advs_by_tag.get(tag_id, []):
+                adv_stats = self._fmt_base_stats(adv_row)
+                if adv_stats is None:
+                    continue  # on ignore les advertisers qui échouent au test
+
                 adv_id = adv_row["adv_id"]
+                bases = []
+                for b in bases_by_tag_adv.get((tag_id, adv_id), []):
+                    base_stats = self._fmt_base_stats(b)
+                    if base_stats is None:
+                        continue  # on ignore les bases qui échouent au test
+                    bases.append({
+                        **base_stats,
+                        "database_id":   b["database_id"],
+                        "database_name": b["database_name"],
+                    })
+
                 adv_entry = {
-                    **self._fmt_base_stats(adv_row),
+                    **adv_stats,
                     "adv_id":   adv_id,
                     "adv_name": adv_row["adv_name"],
-                    "bases": [
-                        {
-                            **self._fmt_base_stats(b),
-                            "database_id":   b["database_id"],
-                            "database_name": b["database_name"],
-                        }
-                        for b in bases_by_tag_adv.get((tag_id, adv_id), [])
-                    ],
+                    "bases": bases,
                 }
                 tag_entry["advertisers"].append(adv_entry)
-
             result.append(tag_entry)
 
         return result
-
     # ------------------------------------------------------------------ #
     #  Public API                                                          #
     # ------------------------------------------------------------------ #
 
-    def recommend(self, sort_by: str = DEFAULT_SORT):
-        """
-        Retourne la recommandation hiérarchique pour le mois courant et le suivant.
-
-        Paramètre
-        ---------
-        sort_by : str
-            Critère de classement appliqué aux 3 niveaux (tags, advertisers, bases).
-            Valeurs acceptées :
-              - "ecpm"     → eCPM décroissant, puis click_rate   (défaut)
-              - "clickers" → clickers décroissants, puis ecpm
-              - "ca"       → CA total décroissant, puis ecpm
-        """
+    def recommend(self, sort_by: str = DEFAULT_SORT, country: str = 'FR'):
         order_by = self._resolve_order(sort_by)
-        where_current, where_next = self._get_where_clauses()
+        where_current, where_next = self._get_where_clauses(country)
         today = date.today()
         current_month = today.month
         next_month = (current_month % 12) + 1
 
-        # current_month et next_month en parallèle — chacun ne fait que 3 queries
         with ThreadPoolExecutor(max_workers=2) as executor:
             f_current = executor.submit(self._build_hierarchy, where_current, order_by)
             f_next    = executor.submit(self._build_hierarchy, where_next,    order_by)
@@ -354,6 +327,7 @@ class Recommended(Query2):
 
         return {
             "sort_by": sort_by,
+            "country": country,
             "current_month": {
                 "month": current_month,
                 "year":  today.year,

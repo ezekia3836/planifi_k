@@ -1,6 +1,4 @@
-# from concurrent.futures import ThreadPoolExecutor, as_completed
 from models.query2 import Query2
-from models.recommended import Recommended
 from service.cache import CacheManager
 from config.ClickHouseConfig import ClickHouseConfig
 from datetime import date, timedelta
@@ -18,14 +16,13 @@ class CacheBatchService:
 
     @staticmethod
     def _get_rolling_date_range():
-        today  = date.today()
+        today      = date.today()
         date_end   = str(today.replace(day=1) + relativedelta(months=1) - timedelta(days=1))
-        date_start = str(today.replace(day=1) - relativedelta(days=1))     
+        date_start = str(today.replace(day=1) - relativedelta(days=1))
         return str(date_start), str(date_end)
 
     @staticmethod
     def _get_available_years(query: Query2) -> list[int]:
-        """Retourne toutes les années présentes dans les données."""
         rows = query._execute_query(f"""
             SELECT DISTINCT toYear(date_schedule_max) AS year
             FROM clean_reporting
@@ -37,7 +34,6 @@ class CacheBatchService:
     @staticmethod
     def _year_range(year: int) -> tuple[str, str]:
         return f"{year}-01-01", f"{year}-12-31"
-
 
     @staticmethod
     def _get_all_countries(query: Query2) -> list[str]:
@@ -58,7 +54,6 @@ class CacheBatchService:
                 AND date_schedule_max BETWEEN '{date_start}' AND '{date_end}'
         """)
         return [int(r["tag_id"]) for r in rows if r["tag_id"]]
-
 
     @staticmethod
     def get_or_compute_advertiser(
@@ -98,7 +93,7 @@ class CacheBatchService:
 
         self._warm_global_endpoints()
         self._warm_extra_endpoints()
-        self._warm_top_advertisers_and_bases() 
+        self._warm_top_advertisers_and_bases()
 
         top_adv  = self._top_ids(query, "adv_id",      top=20)
         top_base = self._top_ids(query, "database_id", top=20)
@@ -110,77 +105,81 @@ class CacheBatchService:
         print(f"✅ Warmup finished in {time.time() - start:.2f}s")
 
     # ------------------------------------------------------------------ #
-    #  New: warm top_advertisers_by_tag + top_10_bases                    #
+    #  Warm top_advertisers_by_tag + top_10_bases                         #
     # ------------------------------------------------------------------ #
 
     def _warm_top_advertisers_and_bases(self):
         print("Warming top_advertisers + top_bases endpoints...")
-        query  = Query2()
-        years  = self._get_available_years(query)
-        today  = date.today()
+        query     = Query2()
+        years     = self._get_available_years(query)
+        countries = self._get_all_countries(query)
+        today     = date.today()
 
-        # S'assurer que l'année courante est bien incluse
         if today.year not in years:
             years.append(today.year)
 
         print(f"  📅 Years to cache: {years}")
+        print(f"  🌍 Countries to cache: {countries}")
         print(f"  🔀 Sort options: {self.SORT_OPTIONS}")
 
-        total = len(years) * len(self.SORT_OPTIONS)
+        total = len(years) * len(self.SORT_OPTIONS) * len(countries)
         done  = 0
 
         for year in years:
             date_start, date_end = self._year_range(year)
 
-            for sort_by in self.SORT_OPTIONS:
+            for country in countries:
 
-                # --- top_advertisers_by_tag ---
-                key_adv = CacheManager.key(
-                    "top_advertisers_by_tag", None, date_start, date_end, sort_by
-                )
-                if CacheManager.get(key_adv) is None:
-                    try:
-                        data = query.top_advertisers_by_tag(
-                            tag_id=None,
-                            date_start=date_start,
-                            date_end=date_end,
-                            sort_by=sort_by,
-                        )
-                        CacheManager.set(key_adv, data)
-                        print(f"  ✅ top_advertisers sort={sort_by} year={year}")
-                    except Exception as e:
-                        print(f"  ❌ top_advertisers sort={sort_by} year={year}: {e}")
-                else:
-                    print(f"  ⏭️  top_advertisers sort={sort_by} year={year} already cached")
+                for sort_by in self.SORT_OPTIONS:
 
-                time.sleep(0.1)
-
-                # --- top_10_bases ---
-                key_base = CacheManager.key(
-                    "top_base", None, date_start, date_end
-                )
-                # top_10_bases n'a pas de sort_by, on ne la recalcule qu'une fois par année
-                if sort_by == self.SORT_OPTIONS[0]:
-                    if CacheManager.get(key_base) is None:
+                    # --- top_advertisers_by_tag ---
+                    key_adv = CacheManager.key(
+                        "top_advertisers_by_tag", None, date_start, date_end, sort_by, country
+                    )
+                    if CacheManager.get(key_adv) is None:
                         try:
-                            data = query.top_10_bases(
+                            data = query.top_advertisers_by_tag(
                                 tag_id=None,
                                 date_start=date_start,
                                 date_end=date_end,
+                                sort_by=sort_by,
+                                country=country,
                             )
-                            CacheManager.set(key_base, data)
-                            print(f"  ✅ top_base year={year}")
+                            CacheManager.set(key_adv, data)
+                            print(f"  ✅ top_advertisers sort={sort_by} year={year} country={country}")
                         except Exception as e:
-                            print(f"  ❌ top_base year={year}: {e}")
+                            print(f"  ❌ top_advertisers sort={sort_by} year={year} country={country}: {e}")
                     else:
-                        print(f"  ⏭️  top_base year={year} already cached")
+                        print(f"  ⏭️  top_advertisers sort={sort_by} year={year} country={country} already cached")
 
                     time.sleep(0.1)
 
-                done += 1
-                print(f"  📊 Progress: {done}/{total}")
+                    # --- top_10_bases (pas de sort_by, une fois par year+country) ---
+                    if sort_by == self.SORT_OPTIONS[0]:
+                        key_base = CacheManager.key(
+                            "top_base", None, date_start, date_end, country
+                        )
+                        if CacheManager.get(key_base) is None:
+                            try:
+                                data = query.top_10_bases(
+                                    tag_id=None,
+                                    date_start=date_start,
+                                    date_end=date_end,
+                                    country=country,
+                                )
+                                CacheManager.set(key_base, data)
+                                print(f"  ✅ top_base year={year} country={country}")
+                            except Exception as e:
+                                print(f"  ❌ top_base year={year} country={country}: {e}")
+                        else:
+                            print(f"  ⏭️  top_base year={year} country={country} already cached")
 
-        print(f"  🏁 top_advertisers + top_bases warmup done ({len(years)} years × {len(self.SORT_OPTIONS)} sorts)")
+                        time.sleep(0.1)
+
+                    done += 1
+                    print(f"  📊 Progress: {done}/{total}")
+
+        print(f"  🏁 top_advertisers + top_bases warmup done ({len(years)} years × {len(self.SORT_OPTIONS)} sorts × {len(countries)} countries)")
 
     # ------------------------------------------------------------------ #
     #  Existing warmup methods                                             #
@@ -315,6 +314,7 @@ class CacheBatchService:
                 time.sleep(0.5)
 
     def _warm_extra_endpoints(self):
+        from models.recommended import Recommended
         print("Warming extra endpoints...")
         query     = Query2()
         query.clk = ClickHouseConfig().getClient_prod()
@@ -333,19 +333,24 @@ class CacheBatchService:
                 print(f"  ❌ {name} error:", e)
             time.sleep(0.2)
 
-        # Recommend — 3 sorts
+        # Recommend — 3 sorts × tous les pays
         recommended = Recommended()
+        query2      = Query2()
+        countries   = self._get_all_countries(query2)
+
         for sort_by in ["ecpm", "clickers", "ca"]:
-            key = CacheManager.key("recommend", sort_by)
-            if CacheManager.get(key) is None:
-                try:
-                    CacheManager.set(key, recommended.recommend(sort_by=sort_by))
-                    print(f"  ✅ recommend sort={sort_by} cached")
-                except Exception as e:
-                    print(f"  ❌ recommend sort={sort_by} error:", e)
-                time.sleep(0.2)
-            else:
-                print(f"  ⏭️  recommend sort={sort_by} already cached")
+            for country in countries:
+                key = CacheManager.key("recommend", sort_by, country)
+                if CacheManager.get(key) is None:
+                    try:
+                        CacheManager.set(key, recommended.recommend(sort_by=sort_by, country=country))
+                        print(f"  ✅ recommend sort={sort_by} country={country} cached")
+                    except Exception as e:
+                        print(f"  ❌ recommend sort={sort_by} country={country} error:", e)
+                    time.sleep(0.2)
+                else:
+                    print(f"  ⏭️  recommend sort={sort_by} country={country} already cached")
+
     def _chunk(self, lst, size=None):
         size = size or self.CHUNK_SIZE
         for i in range(0, len(lst), size):

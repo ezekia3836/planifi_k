@@ -37,15 +37,16 @@ app.include_router(
         expire_minutes=expire_minutes
     )
 )
+
 cron = Cron()
 def job_cron():
     start = datetime.now()
     # cron.start_cache_batch()
-    #cron.start_advertiser()
-    #cron.start_cont()
-    #cron.start_act()
+    # cron.start_advertiser()
+    # cron.start_cont()
+    # cron.start_act()
     # cron.start_tags()
-    #cron.start_agence()
+    # cron.start_agence()
     # cron.start_report_final()
     #cron.start_segment()
     print(f"[{datetime.now()}] Exécution du cron  {datetime.now() - start}")

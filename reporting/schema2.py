@@ -37,9 +37,7 @@ class BrandItem(BaseModel):
     ListName: List[str] = Field(default_factory=list)
     date_schedule: List[date] = Field(default_factory=list)
     sends: Optional[int] = 0
-    clicks: Optional[int] = 0
     clickers: Optional[int] = 0
-    opens: Optional[int] = 0
     openers: Optional[int] = 0
     unsubs: Optional[int] = 0
     taux_clickers: Optional[float] = 0.0
@@ -77,9 +75,7 @@ class BaseItem(BaseModel):
     database_id: int
     brands: List[BrandItem] = Field(default_factory=list)
     sends: int = 0
-    clicks: int = 0
     clickers: int = 0
-    opens: int = 0
     openers: int = 0
     unsubs: int = 0
     taux_clickers: float = 0.0
@@ -99,9 +95,7 @@ class DepStatsModel(BaseModel):
 
 class GlobalAdvertiserStats(BaseModel):
     sends: int = 0
-    clicks: int = 0
     clickers: int = 0
-    opens: int = 0
     openers: int = 0
     unsubs: int = 0
     ecpm: float = 0.0
@@ -122,9 +116,7 @@ class GlobalAdvertiserResponse(BaseModel):
 
 class GobalBaseStats(BaseModel):
     sends: int = 0
-    clicks: int = 0
     clickers: int = 0
-    opens: int = 0
     openers: int = 0
     unsubs: int = 0
     ca: float = 0.0
@@ -142,9 +134,7 @@ class AdvertiserItem(BaseModel):
     advertiser_name: Optional[str] = None
     brands: List[BrandItem] = Field(default_factory=list)
     sends: int = 0
-    clicks: int = 0
     clickers: int = 0
-    opens: int = 0
     openers: int = 0
     unsubs: int = 0
     ca: float = 0.0

@@ -123,16 +123,21 @@ async def all_bases(
     date_start: Optional[str] = None,
     date_end: Optional[str] = None,
     country: list[str] | None = Query(None)
-    
-   
 ):
     if not date_schedule and not (date_start and date_end):
         today      = date.today()
-        date_end   = str(today.replace(day=1) + relativedelta(months=1) - timedelta(days=1))  # fin du mois courant
-        date_start = str(today.replace(day=1) - relativedelta(days=1))                       # début du mois précédent
-    country_key = ",".join(sorted(country)) if country else "None"
-    tags_key = ",".join(sorted(tags)) if tags else "None"
+        date_end   = str(today.replace(day=1) + relativedelta(months=1) - timedelta(days=1))
+        date_start = str(today.replace(day=1) - relativedelta(days=1))
 
+    # Normalisation : si "all" est présent (n'importe quelle casse), on ignore le reste
+    if country and any(c.lower() == "all" for c in country):
+        country = "all"
+
+    country_key = (
+        "all" if country == "all"
+        else ",".join(sorted(country)) if country else "None"
+    )
+    tags_key = ",".join(sorted(tags)) if tags else "None"
     key = CacheManager.key(
         "all_bases",
         tags_key,
@@ -140,9 +145,7 @@ async def all_bases(
         date_start or "None",
         date_end or "None",
         country_key
-        
     )
-
     return cached_or_compute(
         key,
         lambda: Query2().all_bases(
@@ -228,31 +231,30 @@ def list_country(country_id: Optional[int]=None):
     "/top_advertisers",
     summary="Top annonceurs par tag et par mois"
 )
-@router.get("/top_advertisers")
-def top_advertisers_by_tag(tag_id=None, date_start=None, date_end=None, sort_by="ecpm"):
+def top_advertisers_by_tag(tag_id=None, date_start=None, date_end=None,country='FR', sort_by="ecpm"):
     today = date.today()
     if not date_start and not date_end:
         date_start = date(today.year, 1, 1)
         date_end   = date(today.year, 12, 31)
 
-    key  = CacheManager.key("top_advertisers_by_tag", tag_id, str(date_start), str(date_end), sort_by)
+    key  = CacheManager.key("top_advertisers_by_tag", tag_id, str(date_start), str(date_end),country, sort_by)
     data = CacheManager.get(key)
     if data is None:
-        data = Query2().top_advertisers_by_tag(tag_id=tag_id, date_start=date_start, date_end=date_end, sort_by=sort_by)
+        data = Query2().top_advertisers_by_tag(tag_id=tag_id, date_start=date_start, date_end=date_end,country=country, sort_by=sort_by)
         CacheManager.set(key, data)
     return data
 
 @router.get("/top_base")
-def top_base(tag_id=None, date_start=None, date_end=None):
+def top_base(tag_id=None, date_start=None, date_end=None,country='FR'):
     today = date.today()
     if not date_start and not date_end:
         date_start = date(today.year, 1, 1)
         date_end   = date(today.year, 12, 31)
 
-    key  = CacheManager.key("top_base", tag_id, str(date_start), str(date_end))
+    key  = CacheManager.key("top_base", tag_id, str(date_start), str(date_end),country)
     data = CacheManager.get(key)
     if data is None:
-        data = Query2().top_10_bases(tag_id=tag_id, date_start=date_start, date_end=date_end)
+        data = Query2().top_10_bases(tag_id=tag_id, date_start=date_start, date_end=date_end,country=country)
         CacheManager.set(key, data)
     return data
 
@@ -261,11 +263,15 @@ def recommend(
     sort_by: Literal["ecpm", "clickers", "ca"] = Query(
         default="ecpm",
         description="Critère de classement : 'ecpm', 'clickers' ou 'ca'"
+    ),
+    country: str = Query(
+        default="FR",
+        description="Code pays : 'FR', 'ES', 'IT', ..."
     )
 ):
-    key  = CacheManager.key("recommend", sort_by)
+    key  = CacheManager.key("recommend", sort_by, country)
     data = CacheManager.get(key)
     if data is None:
-        data = Recommended().recommend(sort_by=sort_by)
+        data = Recommended().recommend(sort_by=sort_by, country=country)
         CacheManager.set(key, data)
     return data

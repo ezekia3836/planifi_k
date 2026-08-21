@@ -121,59 +121,106 @@ class reporting:
     # ── PG : focus_map ────────────────────────────────────────────────────────
     def recupere_pg(self, date_start: str, date_end: str, batch: int = 1000) -> dict:
         query = text("""
-            WITH base AS (
-                SELECT
-                    vd.id            AS id_focus,
-                    vd.base          AS database_id,
-                    vd.date_shedule,
-                    pa.caeur         AS ca,
-                    pa.clickval      AS clicks_val,
-                    pa.leadsval      AS leads_val,
-                    pa.cpmval        AS cpm_val,
-                    pa.p_comment     AS comment,
-                    pa.payvalue      AS payvalue,
-                    mo.name          AS model
-                FROM visu.v2_data vd
-                JOIN visu.v2_status st          ON st.id    = vd.status
-                LEFT JOIN visu.v2_payoutinfo pa ON pa.id_data = vd.id
-                LEFT JOIN visu.model mo          ON pa.model   = mo.id
-                WHERE st.id = 5
-                  AND vd.date_shedule BETWEEN :date_start AND :date_end
-            ),
-            routers AS (
-                SELECT vd.id AS id_focus, vd.idsendout, TRUE AS is_direct
-                FROM visu.v2_data vd
-                WHERE vd.id IN (SELECT id_focus FROM base)
-                  AND vd.idsendout IS NOT NULL
-                UNION ALL
-                SELECT vd.id AS id_focus, vd2.idsendout, FALSE AS is_direct
-                FROM visu.v2_data vd
-                JOIN visu.v2_data_reuse r  ON r.id_v2  = vd.id
-                JOIN visu.v2_data      vd2 ON vd2.id   = r.id_reuse
-                WHERE vd.id IN (SELECT id_focus FROM base)
-                  AND vd2.idsendout IS NOT NULL
+WITH base AS (
+    SELECT
+        CASE
+            WHEN c.type = 'parent' THEN c.id
+            ELSE c.id_parent
+        END                         AS id_focus,
+
+        c.comment                   AS comment,
+        c.date_schedule             AS date_schedule,
+
+        p.caeur                     AS ca,
+        p.clicksval                 AS clicks_val,
+        p.leadsval                  AS leads_val,
+        p.salesval                  AS sales_val,
+        p.cpmval                    AS cpm_val,
+        p.model                     AS model,
+        p.payvalue                  AS payvalue
+
+    FROM campaigns c
+    LEFT JOIN payout p
+        ON p.campaign_id = c.id
+    WHERE c.date_schedule BETWEEN :date_start AND :date_end
+),
+
+routers AS (
+    SELECT
+        CASE
+            WHEN c.type = 'parent' THEN c.id
+            ELSE c.id_parent
+        END AS id_focus,
+
+        c.idsendout,
+
+        CASE
+            WHEN c.type = 'parent' THEN FALSE
+            ELSE TRUE
+        END AS is_direct
+
+    FROM campaigns c
+    WHERE c.date_schedule BETWEEN :date_start AND :date_end
+      AND c.idsendout IS NOT NULL
+),
+
+routers_agg AS (
+    SELECT
+        id_focus,
+        json_agg(
+            DISTINCT jsonb_build_object(
+                'idsendout', idsendout,
+                'is_direct', is_direct
             )
-            SELECT
-                b.id_focus,
-                b.database_id,
-                MAX(b.ca)         AS ca,
-                json_agg(DISTINCT jsonb_build_object(
-                    'model', b.model,
-                    'payvalue', b.payvalue,
-                    'comment', b.comment)
-                ) AS model,
-                MAX(b.clicks_val) AS clicks_val,
-                MAX(b.leads_val)  AS leads_val,
-                MAX(b.cpm_val)    AS cpm_val,
-                json_agg(DISTINCT b.date_shedule ORDER BY b.date_shedule) AS date_schedule,
-                json_agg(DISTINCT jsonb_build_object(
-                    'idsendout', r.idsendout,
-                    'is_direct', r.is_direct
-                )) FILTER (WHERE r.idsendout IS NOT NULL) AS id_routers
-            FROM base b
-            LEFT JOIN routers r ON r.id_focus = b.id_focus
-            GROUP BY b.id_focus, b.database_id
-        """)
+        ) AS id_routers
+    FROM routers
+    GROUP BY id_focus
+),
+
+focus_agg AS (
+    SELECT
+        b.id_focus,
+
+        SUM(b.ca)         AS ca,
+        SUM(b.clicks_val) AS clicks_val,
+        SUM(b.leads_val)  AS leads_val,
+        SUM(b.sales_val)  AS sales_val,
+        SUM(b.cpm_val)    AS cpm_val,
+
+        json_agg(
+            DISTINCT jsonb_build_object(
+                'model',    b.model,
+                'payvalue', b.payvalue,
+                'comment',  b.comment
+            )
+        ) AS model,
+
+        json_agg(
+            DISTINCT b.date_schedule
+            ORDER BY b.date_schedule
+        ) AS date_schedule
+
+    FROM base b
+    GROUP BY b.id_focus
+)
+
+SELECT
+    fa.id_focus,
+    fa.ca,
+    fa.model,
+    fa.clicks_val,
+    fa.leads_val,
+    fa.sales_val,
+    fa.cpm_val,
+    fa.date_schedule,
+    ra.id_routers
+
+FROM focus_agg fa
+LEFT JOIN routers_agg ra
+    ON ra.id_focus = fa.id_focus
+
+ORDER BY fa.id_focus
+""")
 
         result: dict = {}
         try:
