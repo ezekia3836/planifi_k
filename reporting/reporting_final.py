@@ -28,7 +28,7 @@ class reporting:
     def __init__(self):
         self.clk       = ClickHouseConfig().getClient_prod()
         self.pg        = PgConfig().get_client()
-        self.table     = "old_prod_reporting"
+        self.table     = "prod_reporting"
         self.konticrea = connect_kit()
         self.optimize_cache: dict = {}
         self._optimize_lock = Lock()
@@ -607,7 +607,58 @@ ORDER BY fa.id_focus
                 self.notifier_erreur(f"Erreur optimize chunk {i//chunk+1} : {e}")
         cursor.close()
         return optimized_map
+    def build_agg_month(month: int):
+        query = f"""
+        INSERT INTO prod_reporting_agg_month
+        SELECT
+            toYYYYMM(date_schedule_max) AS month,
+            database_id,
+            adv_id,
+            tag_id,
+            brand,
+            gender,
+            age_range,
+            main_isp,
+            dep,
+            id_focus,
+            sum(sends) AS sends,
+            sum(clicks) AS clicks,
+            sum(opens) AS opens,
+            uniqExactIf(dwh_id, clicks > 0) AS clickers,
+            uniqExactIf(dwh_id, opens > 0) AS openers,
+            uniqExactIf(dwh_id, unsubs > 0) AS unsubs,
+            max(ca) AS ca,
+            any(advertiser_name) AS advertiser_name
+        FROM prod_reporting
+        WHERE toYYYYMM(date_schedule_max) = {month}
+        GROUP BY
+            month,
+            database_id,
+            adv_id,
+            tag_id,
+            brand,
+            gender,
+            age_range,
+            main_isp,
+            dep,
+            id_focus
+        """
+        client.command(query)
 
+    def build_all_agg(self):
+        logger.info("Construction de prod_reporting_agg_month pour tous les mois...")
+        r = self.clk.query("""
+            SELECT DISTINCT toYYYYMM(date_schedule_max) AS month
+            FROM prod_reporting
+            ORDER BY month
+        """)
+        months = [row[0] for row in r.result_rows]
+        for month in months:
+            self.build_agg_month(month)
+            logger.info(f"prod_reporting_agg_month construit pour {month}")
+        logger.info("Construction de prod_reporting_agg_month terminée")
+
+    
     def _process_month(self, month_start: date):
         date_start, date_end = self._month_bounds(month_start)
         label = month_start.strftime("%Y-%m")
@@ -619,6 +670,8 @@ ORDER BY fa.id_focus
             self._insert_reporting(date_start, date_end)
             self._patch_optimized()
             logger.info(f"✓ Mois {label} traité avec succès")
+            self.build_agg_month(int(month_start.strftime("%Y%m")))
+        
         finally:
             self.clk.command("DROP TABLE IF EXISTS tmp_focus_map")
             self.clk.command("DROP TABLE IF EXISTS tmp_contacts")

@@ -213,8 +213,8 @@ class Recommended(Query2):
         date_end_current = today.strftime("%Y-%m-%d")
 
         return (
-            f"date_schedule_max BETWEEN '{date_start_current}' AND '{date_end_current}' AND c.country_code = '{country}'",
-            f"toMonth(date_schedule_max) = {next_month} AND c.country_code = '{country}'",
+            f"toDate(date_schedule_max) BETWEEN '{date_start_current}' AND '{date_end_current}' AND c.country_code = '{country}'",
+            f"toMonth(toDate(date_event)) = {next_month} AND c.country_code = '{country}'",
         )
 
     # ------------------------------------------------------------------ #

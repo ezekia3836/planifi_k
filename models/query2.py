@@ -452,7 +452,7 @@ class Query2:
 
             id_focus = r.get("id_focus")
             ca = r.get("ca") or 0
-            if id_focus:
+            if id_focus is not None:
                 if id_focus not in brand["_seen_focus"]:
                     brand["_seen_focus"].add(id_focus)
                     brand["ca"] += ca
@@ -574,8 +574,7 @@ class Query2:
             },
             group_label: sorted(result, key=lambda x: (x["clickers"], x["ecpm"]), reverse=True),
         }
-    def global_advertiser(self, adv_id, tag_id=None, date_schedule=None, date_start=None, date_end=None,
-                      include_o_age=True, include_o_gender=True, include_o_isp=True,min_sends=0):
+    def global_advertiser(self, adv_id, tag_id=None, date_schedule=None, date_start=None, date_end=None,include_o_age=True, include_o_gender=True, include_o_isp=True,min_sends=0):
         tag_filtre = ''
         if tag_id:
             tag_filtre = f'AND t.tag_id=%(tag_id)s'
@@ -687,6 +686,10 @@ class Query2:
                 WHERE t.database_id = %(db_id)s
                 GROUP BY id_focus
                 HAVING sum(sends) > {min_sends}
+                    OR max(ca) > 0
+                    OR sum(opens) > 0
+                    OR sum(clicks) > 0
+                    OR sum(unsubs) > 0
             ),
             base AS (
                 SELECT t.*, a.name AS advertiser_name,
@@ -698,7 +701,8 @@ class Query2:
                 AND t.adv_id != 0 
                 {date_filter} {other_filter}
             )
-            SELECT t.adv_id                                        AS adv_id,
+            SELECT
+                t.adv_id                                        AS adv_id,
                 t.database_id                                   AS database_id,
                 groupUniqArray(t.id_routers)                    AS id_routers,
                 any(t.tag_id)                                   AS tag_id,
@@ -718,7 +722,7 @@ class Query2:
                 t.dep                                           AS departement,
                 sum(sends)                                      AS sends,
                 sum(t.clicks)                                   AS clicks,
-                uniqExactIf(t.dwh_id, t.clicks>0)              AS clickers,
+                uniqExactIf(t.dwh_id, t.clicks > 0)              AS clickers,
                 sum(t.opens)                                    AS opens,
                 uniqExactIf(t.dwh_id, t.opens > 0)               AS openers,
                 uniqExactIf(t.dwh_id, t.unsubs > 0)               AS unsubs,
@@ -729,8 +733,8 @@ class Query2:
                 groupUniqArrayIf(t.ListName, t.is_zdwh)         AS ListName
             FROM base t
             LEFT JOIN ca_by_focus f ON f.id_focus = t.id_focus
-            GROUP BY t.adv_id, t.database_id,t.brand,t.gender, t.age_range, t.main_isp, t.id_focus, t.dep 
-            
+            GROUP BY t.adv_id, t.database_id, t.brand, t.gender, t.age_range, t.main_isp, t.id_focus, t.dep
+            HAVING sum(t.sends) > 0 OR any(f.ca) > 0
         """
         result = self._run_global(query, {"db_id": db_id}, pivot_key="adv_id", group_label="advertisers")
         result["globales"]["analyse_dep"] = self._get_analyse_dep({"db_id": db_id}, "database_id", date_filter)
@@ -807,13 +811,13 @@ class Query2:
                     sum(openers)  AS openers,
                     sum(clickers) AS clickers,
                     sum(unsubs)   AS unsubs
-                FROM focus_agg
+                FROM focus_agg f
                 GROUP BY adv_id, tag_id
                 HAVING
-                    sum(sends) >= {min_sends}
-                    AND sum(sends) >= sum(openers)
-                    AND sum(sends) >= sum(clickers)
-                    AND sum(sends) >= sum(unsubs)
+                    sum(f.sends) >= {min_sends}
+                    AND sum(f.sends) >= sum(f.openers)
+                    AND sum(f.sends) >= sum(f.clickers)
+                    AND sum(f.sends) >= sum(f.unsubs)
             ),
             ca_final AS (
                 SELECT
@@ -915,7 +919,7 @@ class Query2:
                     SELECT r.database_id
                     FROM {self.table} r
                     JOIN country c ON r.country = c.id
-                    WHERE c.dwh_name IN ({country_values})
+                    WHERE c.country_code IN ({country_values})
                 )
             """
         else:
@@ -925,7 +929,7 @@ class Query2:
                     SELECT r.database_id
                     FROM {self.table} r
                     JOIN country c ON r.country = c.id
-                    WHERE c.dwh_name = 'FR'
+                    WHERE c.country_code = 'FR'
                 )
             """
 
@@ -949,7 +953,7 @@ class Query2:
                 SELECT
                     database_id,
                     id_focus,
-                    uniqExactIf(dwh_id, sends > 0)  AS sends,
+                    sum(sends)  AS sends,
                     uniqExactIf(dwh_id, opens > 0)  AS openers,
                     uniqExactIf(dwh_id, clicks > 0) AS clickers,
                     uniqExactIf(dwh_id, unsubs > 0) AS unsubs,
